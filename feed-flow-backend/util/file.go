@@ -59,3 +59,23 @@ func SaveUploadedFile(c *gin.Context, formKey, saveDir, allowType string, maxSiz
 	fileUrl := fmt.Sprintf("/uploads/%s/%s", saveDir, fileName)
 	return fileUrl, nil
 }
+
+// DeleteUploadedFile 删除 uploads 目录中的本地文件
+func DeleteUploadedFile(fileURL string) error {
+	if fileURL == "" {
+		return nil
+	}
+
+	cleanPath := filepath.Clean(strings.TrimPrefix(fileURL, "/"))
+	if cleanPath == "." || cleanPath == "uploads" {
+		return fmt.Errorf("无效的文件路径")
+	}
+	if !strings.HasPrefix(cleanPath, "uploads"+string(filepath.Separator)) && cleanPath != "uploads" {
+		return fmt.Errorf("仅支持删除 uploads 目录中的文件")
+	}
+
+	if err := os.Remove(cleanPath); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}

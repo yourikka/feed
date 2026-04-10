@@ -1,9 +1,13 @@
 package service
 
 import (
+	"errors"
+
 	"github.com/yourikka/feed-flow/config"
 	"github.com/yourikka/feed-flow/model"
 	"github.com/yourikka/feed-flow/mq"
+	"github.com/yourikka/feed-flow/util"
+	"gorm.io/gorm"
 )
 
 type FeedAuthor struct {
@@ -42,6 +46,53 @@ func PublishVideo(title, playUrl, coverUrl string, authorId uint) error {
 	mq.PublishVideo(video.ID)
 	return nil
 
+}
+
+// DeleteVideo 删除作者自己的视频及其关联数据
+func DeleteVideo(videoID, operatorID uint) error {
+	if videoID == 0 {
+		return errors.New("视频不存在")
+	}
+
+	var video model.Video
+	if err := config.DB.Where("id = ?", videoID).First(&video).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return errors.New("视频不存在")
+		}
+		return err
+	}
+
+	if video.AuthorID != operatorID {
+		return errors.New("无权删除该视频")
+	}
+
+	err := config.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("video_id = ?", videoID).Delete(&model.Comment{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("video_id = ?", videoID).Delete(&model.Like{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("video_id = ?", videoID).Delete(&model.Favorite{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Delete(&video).Error; err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	if err := util.DeleteUploadedFile(video.PlayUrl); err != nil {
+		return err
+	}
+	if err := util.DeleteUploadedFile(video.CoverUrl); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func buildFeedVideos(videos []model.Video, userID *uint) []FeedVideo {

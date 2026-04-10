@@ -23,6 +23,17 @@ export const publishVideo = (data) => {
 }
 
 /**
+ * 删除视频
+ * @param {number|string} videoId 视频ID
+ * @returns 后端返回的删除结果
+ */
+export const deleteVideo = (videoId) => {
+  return request.delete('/publish/action/', {
+    params: { video_id: videoId }
+  })
+}
+
+/**
  * 获取用户发布的视频列表（预留，个人中心用）
  */
 export const getUserVideoList = (userId) => {

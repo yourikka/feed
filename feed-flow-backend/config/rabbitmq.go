@@ -13,7 +13,7 @@ const VideoPublishQueue = "video_publish_queue"
 
 func InitRabbitMQ() {
 	var err error
-	RabbitConn, err = amqp091.Dial("amqp://guest:guest@localhost:5672/")
+	RabbitConn, err = amqp091.Dial(getEnv("RABBITMQ_URL", "amqp://guest:guest@rabbitmq:5672/"))
 	if err != nil {
 		log.Fatalf("Failed to connect to RabbitMQ: %v", err)
 	}

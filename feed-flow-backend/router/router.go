@@ -25,6 +25,7 @@ func SetupRouter() *gin.Engine {
 	private.Use(middleware.JWAuth())
 	{
 		private.POST("/publish/action/", controller.PublishVideo)
+		private.DELETE("/publish/action/", controller.DeleteVideo)
 		private.POST("/comment/action/", controller.CommentVideo)
 		private.DELETE("/comment/action/", controller.DeleteComment)
 		private.POST("/like/action/", controller.LikeVideo)

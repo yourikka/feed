@@ -2,13 +2,14 @@ package util
 
 import (
 	"errors"
+	"os"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 )
 
 // 签名密钥 (实际开发请放环境变量，不要硬编码)
-var jwtSecret = []byte("my_douyin_secret_key")
+var jwtSecret = []byte(getJWTSecret())
 
 // Claims 自定义Token结构
 type Claims struct {
@@ -48,4 +49,11 @@ func ParseToken(tokenString string) (*Claims, error) {
 	}
 
 	return nil, errors.New("invalid token")
+}
+
+func getJWTSecret() string {
+	if secret := os.Getenv("JWT_SECRET"); secret != "" {
+		return secret
+	}
+	return "my_douyin_secret_key"
 }

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+
 	"github.com/yourikka/feed-flow/config"
 	"github.com/yourikka/feed-flow/mq"
 	"github.com/yourikka/feed-flow/router"
@@ -22,5 +24,9 @@ func main() {
 	r.Static("/uploads", "./uploads")
 
 	//启动服务
-	r.Run(":8080")
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+	r.Run(":" + port)
 }

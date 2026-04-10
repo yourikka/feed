@@ -60,6 +60,18 @@
         <el-empty v-if="works.length === 0" description="还没有发布作品" />
         <div v-else class="works-grid">
           <div v-for="video in works" :key="video.ID" class="work-card">
+            <el-popconfirm
+              title="确定删除这个视频吗？"
+              confirm-button-text="删除"
+              cancel-button-text="取消"
+              @confirm="handleDeleteVideo(video.ID)"
+            >
+              <template #reference>
+                <el-button class="delete-btn" type="danger" size="small" plain>
+                  删除
+                </el-button>
+              </template>
+            </el-popconfirm>
             <video
               :src="getMediaUrl(video.PlayUrl)"
               :poster="getMediaUrl(video.CoverUrl)"
@@ -78,7 +90,8 @@
 <script setup>
 import { reactive, ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { getUserInfo, getUserVideoList, updateAvatar } from '../api/user'
+import { getUserInfo, updateAvatar } from '../api/user'
+import { deleteVideo, getUserVideoList } from '../api/feed'
 import { ElMessage } from 'element-plus'
 
 const router = useRouter()
@@ -136,6 +149,21 @@ const handleAvatarChange = async (file) => {
     ElMessage.error(error.response?.data?.status_msg || '头像更新失败')
   } finally {
     loading.value = false
+  }
+}
+
+const handleDeleteVideo = async (videoId) => {
+  try {
+    const res = await deleteVideo(videoId)
+    if (res.status_code === 0) {
+      works.value = works.value.filter(video => video.ID !== videoId)
+      stats.workCount = works.value.length
+      ElMessage.success('视频删除成功')
+      return
+    }
+    ElMessage.error(res.status_msg || '视频删除失败')
+  } catch (error) {
+    ElMessage.error(error.response?.data?.status_msg || '视频删除失败')
   }
 }
 
@@ -261,29 +289,39 @@ onMounted(fetchUserInfo)
 
 .works-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 16px;
 }
 
 .work-card {
-  border: 1px solid #ebeef5;
-  border-radius: 12px;
-  padding: 10px;
+  position: relative;
+  border-radius: 14px;
   background: #fff;
+  border: 1px solid #ebeef5;
+  padding: 12px;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.06);
+}
+
+.delete-btn {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 1;
 }
 
 .work-preview {
   width: 100%;
-  aspect-ratio: 9 / 16;
-  border-radius: 8px;
-  background: #000;
+  height: 240px;
+  border-radius: 12px;
   object-fit: cover;
+  background: #000;
 }
 
 .work-title {
   margin-top: 10px;
   color: #303133;
   font-size: 14px;
-  line-height: 1.4;
+  line-height: 1.5;
+  word-break: break-all;
 }
 </style>

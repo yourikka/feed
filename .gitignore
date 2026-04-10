@@ -19,3 +19,6 @@ feed-flow-backend/uploads/
 .env
 .env.*
 *.local
+
+# Local database dumps
+*.sql

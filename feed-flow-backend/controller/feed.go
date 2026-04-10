@@ -2,6 +2,7 @@ package controller
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -70,4 +71,17 @@ func PublishVideo(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"status_code": 0, "status_msg": "发布成功"})
+}
+
+func DeleteVideo(c *gin.Context) {
+	userID, _ := c.Get("userId")
+	uid, _ := userID.(uint)
+	videoID, _ := strconv.Atoi(c.Query("video_id"))
+
+	if err := service.DeleteVideo(uint(videoID), uid); err != nil {
+		c.JSON(http.StatusOK, gin.H{"status_code": 1, "status_msg": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status_code": 0, "status_msg": "删除成功"})
 }
