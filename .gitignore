@@ -1,0 +1,21 @@
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Logs
+logs/
+*.log
+
+# Frontend dependencies and build output
+feed-flow-frontend/node_modules/
+feed-flow-frontend/dist/
+feed-flow-frontend/dist-ssr/
+
+# Backend runtime data
+feed-flow-backend/uploads/
+
+# Local environment files
+.env
+.env.*
+*.local
