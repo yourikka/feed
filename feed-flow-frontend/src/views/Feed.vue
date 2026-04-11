@@ -69,6 +69,11 @@
           </div>
         </el-card>
       </div>
+      <div v-if="videoList.length > 0" class="load-more-wrap">
+        <el-button :loading="loadingMore" :disabled="!hasMore" @click="fetchList(false)">
+          {{ hasMore ? '加载更多' : '没有更多了' }}
+        </el-button>
+      </div>
     </el-skeleton>
 
     <CommentDialog
@@ -92,20 +97,41 @@ const router = useRouter()
 const defaultAvatar = 'https://via.placeholder.com/150'
 const currentUserId = computed(() => Number(localStorage.getItem('userId') || 0))
 const loading = ref(false)
+const loadingMore = ref(false)
+const hasMore = ref(true)
+const cursor = ref(0)
 const videoList = ref([])
 const showComment = ref(false)
 const currentVideoId = ref(0)
 const currentVideoAuthorId = ref(0)
 
-const fetchList = async () => {
-  loading.value = true
+const fetchList = async (reset = true) => {
+  if (reset) {
+    loading.value = true
+    cursor.value = 0
+    hasMore.value = true
+  } else {
+    if (loadingMore.value || !hasMore.value) return
+    loadingMore.value = true
+  }
+
   try {
-    const res = await getFeedList()
-    if (res.status_code === 0) videoList.value = res.video_list || []
-    else ElMessage.error(res.status_msg || '获取视频列表失败')
+    const params = { limit: 10 }
+    if (!reset && cursor.value) params.cursor = cursor.value
+
+    const res = await getFeedList(params)
+    if (res.status_code === 0) {
+      const list = res.video_list || []
+      videoList.value = reset ? list : [...videoList.value, ...list]
+      cursor.value = Number(res.next_cursor || 0)
+      hasMore.value = !!res.has_more
+    } else ElMessage.error(res.status_msg || '获取视频列表失败')
   } catch (error) {
     ElMessage.error(error.response?.data?.status_msg || '获取视频列表失败')
-  } finally { loading.value = false }
+  } finally {
+    if (reset) loading.value = false
+    else loadingMore.value = false
+  }
 }
 
 const handleLike = async (video) => {
@@ -259,6 +285,12 @@ onMounted(fetchList)
 .video-info h3 {
   margin: 0 0 10px;
   color: #303133;
+}
+
+.load-more-wrap {
+  margin-top: 8px;
+  display: flex;
+  justify-content: center;
 }
 
 .author {

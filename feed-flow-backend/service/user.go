@@ -81,16 +81,11 @@ func GetUserStats(userID uint) (UserStats, error) {
 		return stats, err
 	}
 
-	var userVideos []model.Video
-	if err := config.DB.Where("author_id = ?", userID).Find(&userVideos).Error; err != nil {
+	if err := config.DB.Model(&model.Like{}).
+		Joins("JOIN videos ON videos.id = likes.video_id").
+		Where("videos.author_id = ?", userID).
+		Count(&stats.LikeReceivedCount).Error; err != nil {
 		return stats, err
-	}
-	for _, video := range userVideos {
-		var likeCount int64
-		if err := config.DB.Model(&model.Like{}).Where("video_id = ?", video.ID).Count(&likeCount).Error; err != nil {
-			return stats, err
-		}
-		stats.LikeReceivedCount += likeCount
 	}
 
 	return stats, nil

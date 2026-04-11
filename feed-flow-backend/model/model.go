@@ -16,6 +16,6 @@ type Video struct {
 	Title    string `gorm:"size:20"` //视频标题
 	PlayUrl  string //视频播放地址
 	CoverUrl string //视频封面地址
-	AuthorID uint   //视频作者ID
+	AuthorID uint   `gorm:"index"`               //视频作者ID
 	Author   User   `gorm:"foreignKey:AuthorID"` //视频作者
 }

@@ -4,8 +4,8 @@ import request from '../utils/request'
  * 获取Feed视频流列表
  * @returns 后端返回的视频列表数据
  */
-export const getFeedList = () => {
-  return request.get('/feed/')
+export const getFeedList = (params = {}) => {
+  return request.get('/feed/', { params })
 }
 
 /**

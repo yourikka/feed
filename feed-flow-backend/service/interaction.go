@@ -2,36 +2,83 @@ package service
 
 import (
 	"errors"
+	"strings"
 
+	mysqlDriver "github.com/go-sql-driver/mysql"
 	"github.com/yourikka/feed-flow/config"
 	"github.com/yourikka/feed-flow/model"
 	"gorm.io/gorm"
 )
 
+func isDuplicateEntry(err error) bool {
+	if err == nil {
+		return false
+	}
+	var mysqlErr *mysqlDriver.MySQLError
+	if errors.As(err, &mysqlErr) {
+		return mysqlErr.Number == 1062
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "duplicate")
+}
+
 // 点赞/取消点赞
 func LikeVideo(videoId, userId uint) (bool, error) {
 	var like model.Like
 	err := config.DB.Where("video_id = ? AND user_id = ?", videoId, userId).First(&like).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return true, config.DB.Create(&model.Like{VideoID: videoId, UserID: userId}).Error
+	if err == nil {
+		if delErr := config.DB.Unscoped().Where("video_id = ? AND user_id = ?", videoId, userId).Delete(&model.Like{}).Error; delErr != nil {
+			return false, delErr
+		}
+		adjustVideoStatsCache(videoId, videoStatsLikeField, -1)
+		return false, nil
 	}
-	if err != nil {
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return false, err
 	}
-	return false, config.DB.Where("video_id = ? AND user_id = ?", videoId, userId).Delete(&model.Like{}).Error
+
+	if delErr := config.DB.Unscoped().Where("video_id = ? AND user_id = ?", videoId, userId).Delete(&model.Like{}).Error; delErr != nil {
+		return false, delErr
+	}
+
+	err = config.DB.Create(&model.Like{VideoID: videoId, UserID: userId}).Error
+	if isDuplicateEntry(err) {
+		invalidateVideoStatsCache(videoId)
+		return true, nil
+	}
+	if err == nil {
+		adjustVideoStatsCache(videoId, videoStatsLikeField, 1)
+	}
+	return true, err
 }
 
 // 收藏/取消收藏
 func FavoriteVideo(videoId, userId uint) (bool, error) {
 	var favorite model.Favorite
 	err := config.DB.Where("video_id = ? AND user_id = ?", videoId, userId).First(&favorite).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return true, config.DB.Create(&model.Favorite{VideoID: videoId, UserID: userId}).Error
+	if err == nil {
+		if delErr := config.DB.Unscoped().Where("video_id = ? AND user_id = ?", videoId, userId).Delete(&model.Favorite{}).Error; delErr != nil {
+			return false, delErr
+		}
+		adjustVideoStatsCache(videoId, videoStatsFavoriteField, -1)
+		return false, nil
 	}
-	if err != nil {
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return false, err
 	}
-	return false, config.DB.Where("video_id = ? AND user_id = ?", videoId, userId).Delete(&model.Favorite{}).Error
+
+	if delErr := config.DB.Unscoped().Where("video_id = ? AND user_id = ?", videoId, userId).Delete(&model.Favorite{}).Error; delErr != nil {
+		return false, delErr
+	}
+
+	err = config.DB.Create(&model.Favorite{VideoID: videoId, UserID: userId}).Error
+	if isDuplicateEntry(err) {
+		invalidateVideoStatsCache(videoId)
+		return true, nil
+	}
+	if err == nil {
+		adjustVideoStatsCache(videoId, videoStatsFavoriteField, 1)
+	}
+	return true, err
 }
 
 // 关注/取消关注
@@ -42,13 +89,25 @@ func FollowUser(userId, targetUserId uint) (bool, error) {
 
 	var follow model.Follow
 	err := config.DB.Where("user_id = ? AND target_user_id = ?", userId, targetUserId).First(&follow).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return true, config.DB.Create(&model.Follow{UserID: userId, TargetUserID: targetUserId}).Error
+	if err == nil {
+		if delErr := config.DB.Unscoped().Where("user_id = ? AND target_user_id = ?", userId, targetUserId).Delete(&model.Follow{}).Error; delErr != nil {
+			return false, delErr
+		}
+		return false, nil
 	}
-	if err != nil {
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return false, err
 	}
-	return false, config.DB.Where("user_id = ? AND target_user_id = ?", userId, targetUserId).Delete(&model.Follow{}).Error
+
+	if delErr := config.DB.Unscoped().Where("user_id = ? AND target_user_id = ?", userId, targetUserId).Delete(&model.Follow{}).Error; delErr != nil {
+		return false, delErr
+	}
+
+	err = config.DB.Create(&model.Follow{UserID: userId, TargetUserID: targetUserId}).Error
+	if isDuplicateEntry(err) {
+		return true, nil
+	}
+	return true, err
 }
 
 // 评论视频
@@ -56,11 +115,15 @@ func CommentVideo(videoId, userId uint, content string) error {
 	if content == "" {
 		return errors.New("评论内容不能为空")
 	}
-	return config.DB.Create(&model.Comment{
+	err := config.DB.Create(&model.Comment{
 		VideoID: videoId,
 		UserID:  userId,
 		Content: content,
 	}).Error
+	if err == nil {
+		adjustVideoStatsCache(videoId, videoStatsCommentField, 1)
+	}
+	return err
 }
 
 // 获取视频的评论列表
@@ -97,5 +160,9 @@ func DeleteComment(commentID, operatorID uint) error {
 		}
 	}
 
-	return config.DB.Delete(&model.Comment{}, commentID).Error
+	if err := config.DB.Delete(&model.Comment{}, commentID).Error; err != nil {
+		return err
+	}
+	adjustVideoStatsCache(comment.VideoID, videoStatsCommentField, -1)
+	return nil
 }
