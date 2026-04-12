@@ -1,6 +1,9 @@
 package service
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseInt64FromCacheValue(t *testing.T) {
 	tests := []struct {
@@ -24,5 +27,44 @@ func TestParseInt64FromCacheValue(t *testing.T) {
 				t.Fatalf("parseInt64FromCacheValue(%v) = (%d, %v), want (%d, %v)", tt.input, got, ok, tt.want, tt.ok)
 			}
 		})
+	}
+}
+
+func TestNormalizeVideoIDs(t *testing.T) {
+	got := normalizeVideoIDs([]uint{4, 2, 4, 0, 3, 2, 1})
+	want := []uint{1, 2, 3, 4}
+	if len(got) != len(want) {
+		t.Fatalf("normalizeVideoIDs length = %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("normalizeVideoIDs[%d] = %d, want %d", i, got[i], want[i])
+		}
+	}
+}
+
+func TestBuildVideoStatsBatchLoadKey(t *testing.T) {
+	got := buildVideoStatsBatchLoadKey([]uint{9, 3, 9, 1})
+	if got != "1,3,9" {
+		t.Fatalf("buildVideoStatsBatchLoadKey() = %s, want 1,3,9", got)
+	}
+}
+
+func TestGetVideoStatsCacheTTL(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		got := getVideoStatsCacheTTL()
+		if got < videoStatsCacheTTL {
+			t.Fatalf("ttl %s is smaller than base ttl %s", got, videoStatsCacheTTL)
+		}
+		if got > videoStatsCacheTTL+videoStatsCacheTTLJitter {
+			t.Fatalf("ttl %s exceeds max ttl %s", got, videoStatsCacheTTL+videoStatsCacheTTLJitter)
+		}
+	}
+}
+
+func TestBuildVideoStatsBatchLoadKeyEmpty(t *testing.T) {
+	got := buildVideoStatsBatchLoadKey([]uint{0, 0})
+	if strings.TrimSpace(got) != "" {
+		t.Fatalf("expected empty key, got %q", got)
 	}
 }

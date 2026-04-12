@@ -2,7 +2,11 @@ package service
 
 import (
 	"fmt"
+	"math/rand"
+	"sort"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/yourikka/feed-flow/config"
@@ -21,10 +25,67 @@ const (
 	videoStatsCommentField   = "comment_count"
 	videoStatsFavoriteField  = "favorite_count"
 	videoStatsCacheTTL       = 10 * time.Minute
+	videoStatsCacheTTLJitter = 2 * time.Minute
 )
+
+type videoStatsBatchLoadCall struct {
+	done   chan struct{}
+	result map[uint]videoStats
+	err    error
+}
+
+var videoStatsBatchLoadGroup = struct {
+	mu    sync.Mutex
+	calls map[string]*videoStatsBatchLoadCall
+}{
+	calls: make(map[string]*videoStatsBatchLoadCall),
+}
 
 func videoStatsCacheKey(videoID uint) string {
 	return fmt.Sprintf("%s%d", videoStatsCacheKeyPrefix, videoID)
+}
+
+func normalizeVideoIDs(videoIDs []uint) []uint {
+	if len(videoIDs) == 0 {
+		return nil
+	}
+
+	normalized := make([]uint, 0, len(videoIDs))
+	seen := make(map[uint]struct{}, len(videoIDs))
+	for _, videoID := range videoIDs {
+		if videoID == 0 {
+			continue
+		}
+		if _, ok := seen[videoID]; ok {
+			continue
+		}
+		seen[videoID] = struct{}{}
+		normalized = append(normalized, videoID)
+	}
+	sort.Slice(normalized, func(i, j int) bool {
+		return normalized[i] < normalized[j]
+	})
+	return normalized
+}
+
+func buildVideoStatsBatchLoadKey(videoIDs []uint) string {
+	normalized := normalizeVideoIDs(videoIDs)
+	if len(normalized) == 0 {
+		return ""
+	}
+
+	parts := make([]string, 0, len(normalized))
+	for _, videoID := range normalized {
+		parts = append(parts, strconv.FormatUint(uint64(videoID), 10))
+	}
+	return strings.Join(parts, ",")
+}
+
+func getVideoStatsCacheTTL() time.Duration {
+	if videoStatsCacheTTLJitter <= 0 {
+		return videoStatsCacheTTL
+	}
+	return videoStatsCacheTTL + time.Duration(rand.Int63n(int64(videoStatsCacheTTLJitter)+1))
 }
 
 func parseInt64FromCacheValue(v any) (int64, bool) {
@@ -99,7 +160,7 @@ func setVideoStatsCache(videoID uint, stats videoStats) {
 		videoStatsCommentField:  stats.CommentCount,
 		videoStatsFavoriteField: stats.FavoriteCount,
 	}).Err()
-	_ = config.RDB.Expire(config.Ctx, key, videoStatsCacheTTL).Err()
+	_ = config.RDB.Expire(config.Ctx, key, getVideoStatsCacheTTL()).Err()
 }
 
 func adjustVideoStatsCache(videoID uint, field string, delta int64) {
@@ -115,7 +176,7 @@ func adjustVideoStatsCache(videoID uint, field string, delta int64) {
 	if newVal < 0 {
 		_ = config.RDB.HSet(config.Ctx, key, field, 0).Err()
 	}
-	_ = config.RDB.Expire(config.Ctx, key, videoStatsCacheTTL).Err()
+	_ = config.RDB.Expire(config.Ctx, key, getVideoStatsCacheTTL()).Err()
 }
 
 func invalidateVideoStatsCache(videoID uint) {
@@ -126,6 +187,7 @@ func invalidateVideoStatsCache(videoID uint) {
 }
 
 func queryVideoStats(videoIDs []uint) (map[uint]videoStats, error) {
+	videoIDs = normalizeVideoIDs(videoIDs)
 	stats := make(map[uint]videoStats, len(videoIDs))
 	for _, videoID := range videoIDs {
 		stats[videoID] = videoStats{}
@@ -173,7 +235,45 @@ func queryVideoStats(videoIDs []uint) (map[uint]videoStats, error) {
 	return stats, nil
 }
 
+func loadAndCacheVideoStats(videoIDs []uint) (map[uint]videoStats, error) {
+	videoIDs = normalizeVideoIDs(videoIDs)
+	if len(videoIDs) == 0 {
+		return map[uint]videoStats{}, nil
+	}
+
+	loadKey := buildVideoStatsBatchLoadKey(videoIDs)
+
+	videoStatsBatchLoadGroup.mu.Lock()
+	if call, ok := videoStatsBatchLoadGroup.calls[loadKey]; ok {
+		videoStatsBatchLoadGroup.mu.Unlock()
+		<-call.done
+		return call.result, call.err
+	}
+
+	call := &videoStatsBatchLoadCall{done: make(chan struct{})}
+	videoStatsBatchLoadGroup.calls[loadKey] = call
+	videoStatsBatchLoadGroup.mu.Unlock()
+
+	stats, err := queryVideoStats(videoIDs)
+	if err == nil {
+		for _, videoID := range videoIDs {
+			setVideoStatsCache(videoID, stats[videoID])
+		}
+	}
+
+	call.result = stats
+	call.err = err
+
+	videoStatsBatchLoadGroup.mu.Lock()
+	delete(videoStatsBatchLoadGroup.calls, loadKey)
+	videoStatsBatchLoadGroup.mu.Unlock()
+	close(call.done)
+
+	return stats, err
+}
+
 func getVideoStatsBatch(videoIDs []uint) (map[uint]videoStats, error) {
+	videoIDs = normalizeVideoIDs(videoIDs)
 	if len(videoIDs) == 0 {
 		return map[uint]videoStats{}, nil
 	}
@@ -193,15 +293,13 @@ func getVideoStatsBatch(videoIDs []uint) (map[uint]videoStats, error) {
 		return result, nil
 	}
 
-	dbStats, err := queryVideoStats(missIDs)
+	dbStats, err := loadAndCacheVideoStats(missIDs)
 	if err != nil {
 		return nil, err
 	}
 
 	for _, videoID := range missIDs {
-		stats := dbStats[videoID]
-		result[videoID] = stats
-		setVideoStatsCache(videoID, stats)
+		result[videoID] = dbStats[videoID]
 	}
 
 	return result, nil
