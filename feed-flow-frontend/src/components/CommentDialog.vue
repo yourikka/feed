@@ -23,6 +23,16 @@
           </button>
         </div>
       </div>
+      <div v-if="comments.length > 0" class="load-more-wrap">
+        <el-button
+          size="small"
+          :loading="commentsLoadingMore"
+          :disabled="!commentsHasMore"
+          @click="fetchComments(false)"
+        >
+          {{ commentsHasMore ? '加载更多评论' : '没有更多评论了' }}
+        </el-button>
+      </div>
     </div>
     <template #footer>
       <div class="footer-input">
@@ -65,20 +75,48 @@ const visible = computed({
 })
 const comments = ref([])
 const content = ref('')
+const commentsCursor = ref(0)
+const commentsHasMore = ref(true)
+const commentsLoadingMore = ref(false)
 const currentUserId = computed(() => Number(localStorage.getItem('userId') || 0))
+
+const fetchComments = async (reset = true) => {
+  if (!props.videoId) return
+
+  if (reset) {
+    commentsCursor.value = 0
+    commentsHasMore.value = true
+  } else {
+    if (commentsLoadingMore.value || !commentsHasMore.value) return
+    commentsLoadingMore.value = true
+  }
+
+  try {
+    const params = { limit: 20 }
+    if (!reset && commentsCursor.value) params.cursor = commentsCursor.value
+
+    const res = await getComments(props.videoId, params)
+    if (res.status_code !== 0) {
+      ElMessage.error(res.status_msg || '获取评论失败')
+      return
+    }
+
+    const list = res.comments || []
+    comments.value = reset ? list : [...comments.value, ...list]
+    commentsCursor.value = Number(res.next_cursor || 0)
+    commentsHasMore.value = !!res.has_more
+  } catch (error) {
+    ElMessage.error(error.response?.data?.status_msg || '获取评论失败')
+  } finally {
+    commentsLoadingMore.value = false
+  }
+}
 
 watch(
   () => [visible.value, props.videoId],
   async ([isVisible, videoId]) => {
     if (!isVisible || !videoId) return
-
-    try {
-      const res = await getComments(videoId)
-      if (res.status_code === 0) comments.value = res.comments || []
-      else ElMessage.error(res.status_msg || '获取评论失败')
-    } catch (error) {
-      ElMessage.error(error.response?.data?.status_msg || '获取评论失败')
-    }
+    await fetchComments(true)
   }
 )
 
@@ -98,8 +136,7 @@ const submit = async () => {
     }
 
     content.value = ''
-    const latestComments = await getComments(props.videoId)
-    if (latestComments.status_code === 0) comments.value = latestComments.comments || []
+    await fetchComments(true)
     ElMessage.success('评论成功')
   } catch (error) {
     ElMessage.error(error.response?.data?.status_msg || '评论失败')
@@ -109,6 +146,9 @@ const submit = async () => {
 const handleClose = () => {
   content.value = ''
   comments.value = []
+  commentsCursor.value = 0
+  commentsHasMore.value = true
+  commentsLoadingMore.value = false
   emit('close')
 }
 
@@ -186,5 +226,10 @@ const removeComment = async (item) => {
 .footer-input {
   display: flex;
   gap: 10px;
+}
+.load-more-wrap {
+  display: flex;
+  justify-content: center;
+  padding-top: 10px;
 }
 </style>

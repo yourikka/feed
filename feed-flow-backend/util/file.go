@@ -2,6 +2,9 @@ package util
 
 import (
 	"fmt"
+	"io"
+	"mime/multipart"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,6 +23,53 @@ const (
 	MaxVideoSize   = 1024 * 1024 * 1024 // 1GB
 )
 
+func buildAllowedExtSet(allowType string) map[string]struct{} {
+	set := make(map[string]struct{})
+	for _, ext := range strings.Split(strings.ToLower(allowType), ",") {
+		normalizedExt := strings.TrimSpace(ext)
+		if normalizedExt == "" {
+			continue
+		}
+		set[normalizedExt] = struct{}{}
+	}
+	return set
+}
+
+func normalizeMIMEType(mimeType string) string {
+	return strings.ToLower(strings.TrimSpace(strings.Split(mimeType, ";")[0]))
+}
+
+func detectFileMIMEType(fileHeader *multipart.FileHeader) (string, error) {
+	file, err := fileHeader.Open()
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	buffer := make([]byte, 512)
+	n, err := file.Read(buffer)
+	if err != nil && err != io.EOF {
+		return "", err
+	}
+	if n == 0 {
+		return "", fmt.Errorf("文件内容为空")
+	}
+	return normalizeMIMEType(http.DetectContentType(buffer[:n])), nil
+}
+
+func isMIMETypeAllowed(ext, mimeType, allowType string) bool {
+	mimeType = normalizeMIMEType(mimeType)
+	switch allowType {
+	case AllowImageType:
+		return strings.HasPrefix(mimeType, "image/")
+	case AllowVideoType:
+		// 某些 mkv 文件在 sniff 时会落到 octet-stream，保留兼容。
+		return strings.HasPrefix(mimeType, "video/") || (ext == ".mkv" && mimeType == "application/octet-stream")
+	default:
+		return false
+	}
+}
+
 // SaveUploadedFile 保存上传的文件到本地
 // 参数：c Gin上下文、formKey 表单字段名、saveDir 保存目录（如 "avatar"）、allowType 允许的文件类型、maxSize 最大大小
 // 返回：文件访问URL（如 "/uploads/avatar/xxx.jpg"）、错误
@@ -37,8 +87,16 @@ func SaveUploadedFile(c *gin.Context, formKey, saveDir, allowType string, maxSiz
 
 	// 3. 校验文件类型
 	ext := strings.ToLower(filepath.Ext(file.Filename))
-	if !strings.Contains(allowType, ext) {
+	allowExtSet := buildAllowedExtSet(allowType)
+	if _, ok := allowExtSet[ext]; !ok {
 		return "", fmt.Errorf("不支持的文件类型，仅允许：%s", allowType)
+	}
+	mimeType, err := detectFileMIMEType(file)
+	if err != nil {
+		return "", fmt.Errorf("文件内容校验失败")
+	}
+	if !isMIMETypeAllowed(ext, mimeType, allowType) {
+		return "", fmt.Errorf("文件内容与扩展名不匹配")
 	}
 
 	// 4. 生成唯一文件名（UUID + 原后缀），避免重名

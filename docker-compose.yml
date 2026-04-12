@@ -51,9 +51,13 @@ services:
     environment:
       PORT: 8080
       MYSQL_DSN: root:root123@tcp(mysql:3306)/douyin?charset=utf8mb4&parseTime=True&loc=Local
+      DB_AUTO_MIGRATE: "true"
       REDIS_ADDR: redis:6379
       REDIS_PASSWORD: ""
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      RABBITMQ_FORCE_REDECLARE: "false"
+      RABBITMQ_PREFETCH: "20"
+      RABBITMQ_RETRY_TTL_MS: "5000"
       JWT_SECRET: my_douyin_secret_key
     ports:
       - "8080:8080"

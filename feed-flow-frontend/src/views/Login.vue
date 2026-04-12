@@ -4,7 +4,7 @@
       <div class="logo-area">
         <el-icon :size="60" color="#409EFF"><VideoPlay /></el-icon>
         <h1>短视频</h1>
-        <p>从零到一的全栈项目</p>
+        <p>请登录</p>
       </div>
 
       <el-form :model="form" size="large">

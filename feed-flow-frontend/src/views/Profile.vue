@@ -55,7 +55,7 @@
       <div class="works-section">
         <div class="works-header">
           <h3>我的作品</h3>
-          <span>{{ works.length }} 个</span>
+          <span>{{ stats.workCount }} 个</span>
         </div>
         <el-empty v-if="works.length === 0" description="还没有发布作品" />
         <div v-else class="works-grid">
@@ -82,6 +82,15 @@
             <div class="work-title">{{ video.Title }}</div>
           </div>
         </div>
+        <div v-if="works.length > 0" class="load-more-wrap">
+          <el-button
+            :loading="worksLoadingMore"
+            :disabled="!worksHasMore"
+            @click="fetchWorks(false)"
+          >
+            {{ worksHasMore ? '加载更多作品' : '没有更多作品了' }}
+          </el-button>
+        </div>
       </div>
     </el-card>
   </div>
@@ -99,6 +108,9 @@ const loading = ref(false)
 const defaultAvatar = 'https://via.placeholder.com/150'
 const userInfo = ref({})
 const works = ref([])
+const worksCursor = ref(0)
+const worksHasMore = ref(true)
+const worksLoadingMore = ref(false)
 const stats = reactive({
   workCount: 0,
   likeReceivedCount: 0,
@@ -106,12 +118,39 @@ const stats = reactive({
   followerCount: 0
 })
 
+const fetchWorks = async (reset = true) => {
+  if (reset) {
+    worksCursor.value = 0
+    worksHasMore.value = true
+  } else {
+    if (worksLoadingMore.value || !worksHasMore.value) return
+    worksLoadingMore.value = true
+  }
+
+  try {
+    const params = { limit: 9 }
+    if (!reset && worksCursor.value) params.cursor = worksCursor.value
+
+    const worksRes = await getUserVideoList(localStorage.getItem('userId'), params)
+    if (worksRes.status_code !== 0) {
+      ElMessage.error(worksRes.status_msg || '获取作品失败')
+      return
+    }
+
+    const list = worksRes.video_list || []
+    works.value = reset ? list : [...works.value, ...list]
+    worksCursor.value = Number(worksRes.next_cursor || 0)
+    worksHasMore.value = !!worksRes.has_more
+  } catch (error) {
+    ElMessage.error(error.response?.data?.status_msg || '获取作品失败')
+  } finally {
+    worksLoadingMore.value = false
+  }
+}
+
 const fetchUserInfo = async () => {
   try {
-    const [userRes, worksRes] = await Promise.all([
-      getUserInfo(),
-      getUserVideoList(localStorage.getItem('userId'))
-    ])
+    const userRes = await getUserInfo()
 
     if (userRes.status_code === 0) {
       userInfo.value = userRes.user
@@ -119,12 +158,11 @@ const fetchUserInfo = async () => {
       stats.likeReceivedCount = userRes.stats?.like_received_count || 0
       stats.followCount = userRes.stats?.follow_count || 0
       stats.followerCount = userRes.stats?.follower_count || 0
+    } else {
+      ElMessage.error(userRes.status_msg || '获取个人信息失败')
     }
 
-    if (worksRes.status_code === 0) {
-      works.value = worksRes.video_list || []
-      stats.workCount = works.value.length
-    }
+    await fetchWorks(true)
   } catch (error) {
     ElMessage.error('获取个人信息失败')
   }
@@ -157,7 +195,7 @@ const handleDeleteVideo = async (videoId) => {
     const res = await deleteVideo(videoId)
     if (res.status_code === 0) {
       works.value = works.value.filter(video => video.ID !== videoId)
-      stats.workCount = works.value.length
+      stats.workCount = Math.max(0, stats.workCount - 1)
       ElMessage.success('视频删除成功')
       return
     }
@@ -323,5 +361,11 @@ onMounted(fetchUserInfo)
   font-size: 14px;
   line-height: 1.5;
   word-break: break-all;
+}
+
+.load-more-wrap {
+  margin-top: 16px;
+  display: flex;
+  justify-content: center;
 }
 </style>

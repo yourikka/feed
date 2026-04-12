@@ -10,6 +10,16 @@ import (
 	"gorm.io/gorm"
 )
 
+func normalizeCommentLimit(limit int) int {
+	if limit <= 0 {
+		return 20
+	}
+	if limit > 50 {
+		return 50
+	}
+	return limit
+}
+
 func isDuplicateEntry(err error) bool {
 	if err == nil {
 		return false
@@ -127,10 +137,30 @@ func CommentVideo(videoId, userId uint, content string) error {
 }
 
 // 获取视频的评论列表
-func GetComments(videoId uint) ([]model.Comment, error) {
+func GetComments(videoId uint, cursor uint, limit int) ([]model.Comment, uint, bool, error) {
+	limit = normalizeCommentLimit(limit)
+	query := config.DB.Preload("User").Where("video_id = ?", videoId).Order("id desc")
+	if cursor > 0 {
+		query = query.Where("id < ?", cursor)
+	}
+
 	var comments []model.Comment
-	err := config.DB.Preload("User").Where("video_id = ?", videoId).Order("created_at desc").Find(&comments).Error
-	return comments, err
+	err := query.Limit(limit + 1).Find(&comments).Error
+	if err != nil {
+		return nil, 0, false, err
+	}
+
+	hasMore := len(comments) > limit
+	if hasMore {
+		comments = comments[:limit]
+	}
+
+	nextCursor := uint(0)
+	if hasMore && len(comments) > 0 {
+		nextCursor = comments[len(comments)-1].ID
+	}
+
+	return comments, nextCursor, hasMore, nil
 }
 
 // 删除评论

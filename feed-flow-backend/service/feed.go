@@ -258,11 +258,34 @@ func GetVideoFeed(userID *uint, cursor uint, limit int) ([]FeedVideo, uint, bool
 }
 
 // GetUserVideoList 获取用户作品列表
-func GetUserVideoList(targetUserID uint, currentUserID *uint) ([]FeedVideo, error) {
-	var videos []model.Video
-	err := config.DB.Preload("Author").Where("author_id = ?", targetUserID).Order("id desc").Find(&videos).Error
-	if err != nil {
-		return nil, err
+func GetUserVideoList(targetUserID uint, currentUserID *uint, cursor uint, limit int) ([]FeedVideo, uint, bool, error) {
+	limit = normalizeFeedLimit(limit)
+
+	query := config.DB.Preload("Author").Where("author_id = ?", targetUserID).Order("id desc")
+	if cursor > 0 {
+		query = query.Where("id < ?", cursor)
 	}
-	return buildFeedVideos(videos, currentUserID)
+
+	var videos []model.Video
+	err := query.Limit(limit + 1).Find(&videos).Error
+	if err != nil {
+		return nil, 0, false, err
+	}
+
+	hasMore := len(videos) > limit
+	if hasMore {
+		videos = videos[:limit]
+	}
+
+	feedVideos, err := buildFeedVideos(videos, currentUserID)
+	if err != nil {
+		return nil, 0, false, err
+	}
+
+	nextCursor := uint(0)
+	if hasMore && len(videos) > 0 {
+		nextCursor = videos[len(videos)-1].ID
+	}
+
+	return feedVideos, nextCursor, hasMore, nil
 }

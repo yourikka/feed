@@ -2,7 +2,6 @@ package controller
 
 import (
 	"log"
-	"net/http"
 	"strconv"
 	"strings"
 
@@ -25,20 +24,16 @@ func Feed(c *gin.Context) {
 
 	cursor, err := strconv.ParseUint(c.DefaultQuery("cursor", "0"), 10, 64)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"status_code": 1, "status_msg": "cursor 参数错误", "video_list": []any{}, "next_cursor": 0, "has_more": false})
+		respondError(c, "cursor 参数错误", gin.H{
+			"video_list":  []any{},
+			"next_cursor": 0,
+			"has_more":    false,
+		})
 		return
 	}
 	limit, err := strconv.Atoi(c.DefaultQuery("limit", "10"))
 	if err != nil || limit <= 0 {
-		c.JSON(http.StatusOK, gin.H{"status_code": 1, "status_msg": "limit 参数错误", "video_list": []any{}, "next_cursor": 0, "has_more": false})
-		return
-	}
-
-	videos, nextCursor, hasMore, err := service.GetVideoFeed(userID, uint(cursor), limit)
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"status_code": 1,
-			"status_msg":  "获取视频流失败",
+		respondError(c, "limit 参数错误", gin.H{
 			"video_list":  []any{},
 			"next_cursor": 0,
 			"has_more":    false,
@@ -46,9 +41,17 @@ func Feed(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"status_code": 0,
-		"status_msg":  "获取成功",
+	videos, nextCursor, hasMore, err := service.GetVideoFeed(userID, uint(cursor), limit)
+	if err != nil {
+		respondError(c, "获取视频流失败", gin.H{
+			"video_list":  []any{},
+			"next_cursor": 0,
+			"has_more":    false,
+		})
+		return
+	}
+
+	respondSuccess(c, "获取成功", gin.H{
 		"video_list":  videos,
 		"next_cursor": nextCursor,
 		"has_more":    hasMore,
@@ -61,14 +64,14 @@ func PublishVideo(c *gin.Context) {
 
 	title := c.PostForm("title")
 	if title == "" {
-		c.JSON(http.StatusOK, gin.H{"status_code": 1, "status_msg": "标题不能为空"})
+		respondError(c, "标题不能为空", nil)
 		return
 	}
 
 	// 上传视频
 	playUrl, err := util.SaveUploadedFile(c, "video", "video", util.AllowVideoType, util.MaxVideoSize)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"status_code": 1, "status_msg": err.Error()})
+		respondError(c, err.Error(), nil)
 		return
 	}
 
@@ -78,7 +81,7 @@ func PublishVideo(c *gin.Context) {
 		if cleanupErr := util.DeleteUploadedFile(playUrl); cleanupErr != nil {
 			log.Printf("cleanup uploaded video failed: %v", cleanupErr)
 		}
-		c.JSON(http.StatusOK, gin.H{"status_code": 1, "status_msg": err.Error()})
+		respondError(c, err.Error(), nil)
 		return
 	}
 
@@ -91,11 +94,11 @@ func PublishVideo(c *gin.Context) {
 		if cleanupErr := util.DeleteUploadedFile(coverUrl); cleanupErr != nil {
 			log.Printf("cleanup uploaded cover failed: %v", cleanupErr)
 		}
-		c.JSON(http.StatusOK, gin.H{"status_code": 1, "status_msg": "发布失败"})
+		respondError(c, "发布失败", nil)
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"status_code": 0, "status_msg": "发布成功"})
+	respondSuccess(c, "发布成功", nil)
 }
 
 func DeleteVideo(c *gin.Context) {
@@ -107,9 +110,9 @@ func DeleteVideo(c *gin.Context) {
 	}
 
 	if err := service.DeleteVideo(videoID, uid); err != nil {
-		c.JSON(http.StatusOK, gin.H{"status_code": 1, "status_msg": err.Error()})
+		respondError(c, err.Error(), nil)
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"status_code": 0, "status_msg": "删除成功"})
+	respondSuccess(c, "删除成功", nil)
 }

@@ -1,26 +1,32 @@
 package mq
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"log"
 	"strconv"
+	"time"
 
 	"github.com/rabbitmq/amqp091-go"
 	"github.com/yourikka/feed-flow/config"
 )
 
-// 队列名称
-const VideoPublishStream = "video_publish_stream"
+const (
+	videoPublishMaxRetry = 3
+	publishTimeout       = 5 * time.Second
+)
 
 // PublishVideo 发送消息：视频发布成功后异步通知
-func PublishVideo(videoId uint) {
-	err := config.RabbitCh.Publish(
-		"", //默认交换机
+func PublishVideo(videoID uint) {
+	err := publishMessage(
+		"",
 		config.VideoPublishQueue,
-		false,
-		false,
 		amqp091.Publishing{
-			ContentType: "text/plain",
-			Body:        []byte(strconv.Itoa(int(videoId))),
+			ContentType:  "text/plain",
+			Body:         []byte(strconv.Itoa(int(videoID))),
+			DeliveryMode: amqp091.Persistent,
+			Timestamp:    time.Now(),
 		},
 	)
 	if err != nil {
@@ -31,10 +37,10 @@ func PublishVideo(videoId uint) {
 func ConsumerVideoMQ() {
 	log.Println("mq消费者启动成功")
 
-	msgs, err := config.RabbitCh.Consume(
+	msgs, err := config.RabbitConsumeCh.Consume(
 		config.VideoPublishQueue,
 		"",
-		true,
+		false,
 		false,
 		false,
 		false,
@@ -42,17 +48,260 @@ func ConsumerVideoMQ() {
 	)
 	if err != nil {
 		log.Println("mq读取消息失败:", err)
+		return
 	}
 
-	//处理消息
 	for msg := range msgs {
-		videoID, _ := strconv.Atoi(string(msg.Body))
-		log.Println("收到mq消息,处理视频发布:", videoID)
+		handleVideoMessage(msg)
+	}
+}
 
-		// ========== 这里写你的异步业务逻辑 ==========
-		// 1. 视频审核
-		// 2. 热度统计
-		// 3. 粉丝推送
-		// 4. 搜索索引构建
+func ConsumerVideoMQWithContext(ctx context.Context) {
+	log.Println("mq消费者启动成功")
+
+	consumerTag := fmt.Sprintf("video_publish_consumer_%d", time.Now().UnixNano())
+	msgs, err := config.RabbitConsumeCh.Consume(
+		config.VideoPublishQueue,
+		consumerTag,
+		false,
+		false,
+		false,
+		false,
+		nil,
+	)
+	if err != nil {
+		log.Println("mq读取消息失败:", err)
+		return
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Println("mq消费者收到停止信号，准备退出")
+			if err := config.RabbitConsumeCh.Cancel(consumerTag, false); err != nil {
+				log.Printf("mq取消消费者失败: %v", err)
+			}
+			return
+		case msg, ok := <-msgs:
+			if !ok {
+				log.Println("mq消费者消息通道已关闭")
+				return
+			}
+			handleVideoMessage(msg)
+		}
+	}
+}
+
+func handleVideoMessage(msg amqp091.Delivery) {
+	retryCount := getRetryCount(msg.Headers)
+
+	videoID, err := strconv.Atoi(string(msg.Body))
+	if err != nil {
+		log.Printf("mq消息格式错误 body=%s: %v", string(msg.Body), err)
+		handleFinalFailure(msg, retryCount, err)
+		return
+	}
+
+	if err := processVideoPublish(videoID); err != nil {
+		log.Printf("mq处理失败 video_id=%d retry=%d err=%v", videoID, retryCount, err)
+		handleConsumeFailure(msg, retryCount, err)
+		return
+	}
+
+	if err := msg.Ack(false); err != nil {
+		log.Printf("mq ack失败 video_id=%d err=%v", videoID, err)
+	}
+}
+
+func processVideoPublish(videoID int) error {
+	if videoID <= 0 {
+		return fmt.Errorf("invalid video id: %d", videoID)
+	}
+
+	log.Println("收到mq消息,处理视频发布:", videoID)
+	// ========== 这里写你的异步业务逻辑 ==========
+	// 1. 视频审核
+	// 2. 热度统计
+	// 3. 粉丝推送
+	// 4. 搜索索引构建
+	return nil
+}
+
+func handleConsumeFailure(msg amqp091.Delivery, retryCount int, cause error) {
+	if retryCount >= videoPublishMaxRetry {
+		handleFinalFailure(msg, retryCount, cause)
+		return
+	}
+
+	if err := publishToRetryQueue(msg, retryCount+1, cause); err != nil {
+		log.Printf("mq投递重试队列失败 retry=%d err=%v", retryCount, err)
+		if nackErr := msg.Nack(false, true); nackErr != nil {
+			log.Printf("mq nack失败 err=%v", nackErr)
+		}
+		return
+	}
+
+	if err := msg.Ack(false); err != nil {
+		log.Printf("mq ack失败 err=%v", err)
+	}
+}
+
+func handleFinalFailure(msg amqp091.Delivery, retryCount int, cause error) {
+	if err := publishToDLQ(msg, retryCount, cause); err != nil {
+		log.Printf("mq投递死信队列失败 err=%v", err)
+		if nackErr := msg.Nack(false, true); nackErr != nil {
+			log.Printf("mq nack失败 err=%v", nackErr)
+		}
+		return
+	}
+
+	if err := msg.Ack(false); err != nil {
+		log.Printf("mq ack失败 err=%v", err)
+	}
+}
+
+func publishToRetryQueue(msg amqp091.Delivery, retryCount int, cause error) error {
+	headers := cloneHeaders(msg.Headers)
+	headers["x-retry-count"] = retryCount
+	headers["x-last-error"] = cause.Error()
+
+	return publishMessage(
+		"",
+		config.VideoPublishRetryQueue,
+		amqp091.Publishing{
+			ContentType:     msg.ContentType,
+			Body:            msg.Body,
+			Headers:         headers,
+			DeliveryMode:    amqp091.Persistent,
+			CorrelationId:   msg.CorrelationId,
+			ContentEncoding: msg.ContentEncoding,
+			MessageId:       msg.MessageId,
+			Type:            msg.Type,
+			Timestamp:       time.Now(),
+		},
+	)
+}
+
+func publishToDLQ(msg amqp091.Delivery, retryCount int, cause error) error {
+	headers := cloneHeaders(msg.Headers)
+	headers["x-retry-count"] = retryCount
+	headers["x-final-error"] = cause.Error()
+
+	return publishMessage(
+		config.VideoPublishDLX,
+		config.VideoPublishDLQRoutingKey,
+		amqp091.Publishing{
+			ContentType:     msg.ContentType,
+			Body:            msg.Body,
+			Headers:         headers,
+			DeliveryMode:    amqp091.Persistent,
+			CorrelationId:   msg.CorrelationId,
+			ContentEncoding: msg.ContentEncoding,
+			MessageId:       msg.MessageId,
+			Type:            msg.Type,
+			Timestamp:       time.Now(),
+		},
+	)
+}
+
+func publishMessage(exchange, routingKey string, publishing amqp091.Publishing) error {
+	ch, err := config.RabbitConn.Channel()
+	if err != nil {
+		return err
+	}
+	defer ch.Close()
+
+	if err := ch.Confirm(false); err != nil {
+		return err
+	}
+	confirmChan := ch.NotifyPublish(make(chan amqp091.Confirmation, 1))
+
+	ctx, cancel := context.WithTimeout(context.Background(), publishTimeout)
+	defer cancel()
+
+	if err := ch.PublishWithContext(
+		ctx,
+		exchange,
+		routingKey,
+		false,
+		false,
+		publishing,
+	); err != nil {
+		return err
+	}
+
+	select {
+	case confirm, ok := <-confirmChan:
+		if !ok {
+			return errors.New("publisher confirm channel closed")
+		}
+		if !confirm.Ack {
+			return errors.New("publisher nack received")
+		}
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("publisher confirm timeout: %w", ctx.Err())
+	}
+}
+
+func cloneHeaders(headers amqp091.Table) amqp091.Table {
+	if headers == nil {
+		return amqp091.Table{}
+	}
+	cloned := make(amqp091.Table, len(headers))
+	for k, v := range headers {
+		cloned[k] = v
+	}
+	return cloned
+}
+
+func getRetryCount(headers amqp091.Table) int {
+	if headers == nil {
+		return 0
+	}
+	raw, ok := headers["x-retry-count"]
+	if !ok {
+		return 0
+	}
+
+	switch v := raw.(type) {
+	case int:
+		if v < 0 {
+			return 0
+		}
+		return v
+	case int8:
+		if v < 0 {
+			return 0
+		}
+		return int(v)
+	case int16:
+		if v < 0 {
+			return 0
+		}
+		return int(v)
+	case int32:
+		if v < 0 {
+			return 0
+		}
+		return int(v)
+	case int64:
+		if v < 0 {
+			return 0
+		}
+		return int(v)
+	case float64:
+		if v < 0 {
+			return 0
+		}
+		return int(v)
+	case string:
+		parsed, err := strconv.Atoi(v)
+		if err != nil || parsed < 0 {
+			return 0
+		}
+		return parsed
+	default:
+		return 0
 	}
 }

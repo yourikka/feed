@@ -1,7 +1,7 @@
 package controller
 
 import (
-	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -19,10 +19,10 @@ func LikeVideo(c *gin.Context) {
 
 	liked, err := service.LikeVideo(videoID, uid)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"status_code": 1, "status_msg": "点赞失败"})
+		respondError(c, "点赞失败", nil)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"status_code": 0, "status_msg": "操作成功", "liked": liked})
+	respondSuccess(c, "操作成功", gin.H{"liked": liked})
 }
 
 // 收藏
@@ -36,10 +36,10 @@ func FavoriteVideo(c *gin.Context) {
 
 	favorited, err := service.FavoriteVideo(videoID, uid)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"status_code": 1, "status_msg": "收藏失败"})
+		respondError(c, "收藏失败", nil)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"status_code": 0, "status_msg": "操作成功", "favorited": favorited})
+	respondSuccess(c, "操作成功", gin.H{"favorited": favorited})
 }
 
 // 关注
@@ -53,10 +53,10 @@ func FollowUser(c *gin.Context) {
 
 	following, err := service.FollowUser(uid, targetUserID)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"status_code": 1, "status_msg": err.Error()})
+		respondError(c, err.Error(), nil)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"status_code": 0, "status_msg": "操作成功", "following": following})
+	respondSuccess(c, "操作成功", gin.H{"following": following})
 }
 
 // 发表评论
@@ -71,10 +71,10 @@ func CommentVideo(c *gin.Context) {
 
 	err := service.CommentVideo(videoID, uid, content)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"status_code": 1, "status_msg": err.Error()})
+		respondError(c, err.Error(), nil)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"status_code": 0, "status_msg": "评论成功"})
+	respondSuccess(c, "评论成功", nil)
 }
 
 // 删除评论
@@ -88,10 +88,10 @@ func DeleteComment(c *gin.Context) {
 
 	err := service.DeleteComment(commentID, uid)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"status_code": 1, "status_msg": err.Error()})
+		respondError(c, err.Error(), nil)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"status_code": 0, "status_msg": "删除成功"})
+	respondSuccess(c, "删除成功", nil)
 }
 
 // 获取评论
@@ -101,14 +101,32 @@ func GetComment(c *gin.Context) {
 		return
 	}
 
-	comments, err := service.GetComments(videoID)
+	cursor, err := strconv.ParseUint(c.DefaultQuery("cursor", "0"), 10, 64)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"status_code": 1, "status_msg": "获取评论失败"})
+		respondError(c, "cursor 参数错误", gin.H{
+			"comments":    []any{},
+			"next_cursor": 0,
+			"has_more":    false,
+		})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"status_code": 0,
-		"status_msg":  "获取成功",
+	limit, ok := parseOptionalPositiveIntQuery(c, "limit", 20)
+	if !ok {
+		return
+	}
+
+	comments, nextCursor, hasMore, err := service.GetComments(videoID, uint(cursor), limit)
+	if err != nil {
+		respondError(c, "获取评论失败", gin.H{
+			"comments":    []any{},
+			"next_cursor": 0,
+			"has_more":    false,
+		})
+		return
+	}
+	respondSuccess(c, "获取成功", gin.H{
 		"comments":    comments,
+		"next_cursor": nextCursor,
+		"has_more":    hasMore,
 	})
 }

@@ -1,7 +1,6 @@
 package controller
 
 import (
-	"net/http"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
@@ -24,44 +23,48 @@ type PasswordChangeRequest struct {
 func Register(c *gin.Context) {
 	var req UserRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		respondError(c, "参数错误", nil)
 		return
 	}
 
 	user, err := service.Register(req.Username, req.Password)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"status_code": 1, "status_msg": err.Error()})
+		respondError(c, err.Error(), nil)
 		return
 	}
 
 	token, err := util.GenerateToken(user.ID)
-	c.JSON(http.StatusOK, gin.H{
-		"status_code": 0,
-		"status_msg":  "注册成功",
-		"user_id":     user.ID,
-		"token":       token,
+	if err != nil {
+		respondError(c, "生成token失败", nil)
+		return
+	}
+	respondSuccess(c, "注册成功", gin.H{
+		"user_id": user.ID,
+		"token":   token,
 	})
 }
 
 func Login(c *gin.Context) {
 	var req UserRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		respondError(c, "参数错误", nil)
 		return
 	}
 
 	user, err := service.Login(req.Username, req.Password)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"status_code": 1, "status_msg": err.Error()})
+		respondError(c, err.Error(), nil)
 		return
 	}
 
 	token, err := util.GenerateToken(user.ID)
-	c.JSON(http.StatusOK, gin.H{
-		"status_code": 0,
-		"status_msg":  "登录成功",
-		"user_id":     user.ID,
-		"token":       token,
+	if err != nil {
+		respondError(c, "生成token失败", nil)
+		return
+	}
+	respondSuccess(c, "登录成功", gin.H{
+		"user_id": user.ID,
+		"token":   token,
 	})
 }
 
@@ -71,21 +74,19 @@ func GetUserInfo(c *gin.Context) {
 
 	user, err := service.GetUserByID(uid)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"status_code": 1, "status_msg": "获取用户信息失败"})
+		respondError(c, "获取用户信息失败", nil)
 		return
 	}
 
 	stats, err := service.GetUserStats(uid)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"status_code": 1, "status_msg": "获取用户信息失败"})
+		respondError(c, "获取用户信息失败", nil)
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"status_code": 0,
-		"status_msg":  "获取成功",
-		"user":        user,
-		"stats":       stats,
+	respondSuccess(c, "获取成功", gin.H{
+		"user":  user,
+		"stats": stats,
 	})
 }
 
@@ -100,16 +101,29 @@ func GetUserVideoList(c *gin.Context) {
 		}
 	}
 
-	videoList, err := service.GetUserVideoList(targetUID, &currentUID)
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"status_code": 1, "status_msg": "获取作品失败", "video_list": []any{}})
+	cursor, ok := parseOptionalUintQuery(c, "cursor", 0)
+	if !ok {
+		return
+	}
+	limit, ok := parseOptionalPositiveIntQuery(c, "limit", 10)
+	if !ok {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"status_code": 0,
-		"status_msg":  "获取成功",
+	videoList, nextCursor, hasMore, err := service.GetUserVideoList(targetUID, &currentUID, cursor, limit)
+	if err != nil {
+		respondError(c, "获取作品失败", gin.H{
+			"video_list":  []any{},
+			"next_cursor": 0,
+			"has_more":    false,
+		})
+		return
+	}
+
+	respondSuccess(c, "获取成功", gin.H{
 		"video_list":  videoList,
+		"next_cursor": nextCursor,
+		"has_more":    hasMore,
 	})
 }
 
@@ -119,19 +133,17 @@ func UpdateAvatar(c *gin.Context) {
 
 	avatarUrl, err := util.SaveUploadedFile(c, "avatar", "avatar", util.AllowImageType, util.MaxImageSize)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"status_code": 1, "status_msg": err.Error()})
+		respondError(c, err.Error(), nil)
 		return
 	}
 
 	if err := config.DB.Model(&model.User{}).Where("id = ?", uid).Update("avatar", avatarUrl).Error; err != nil {
-		c.JSON(http.StatusOK, gin.H{"status_code": 1, "status_msg": "更新头像失败"})
+		respondError(c, "更新头像失败", nil)
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"status_code": 0,
-		"status_msg":  "头像更新成功",
-		"avatar_url":  avatarUrl,
+	respondSuccess(c, "头像更新成功", gin.H{
+		"avatar_url": avatarUrl,
 	})
 }
 
@@ -148,14 +160,12 @@ func GetFollowList(c *gin.Context) {
 
 	list, err := service.GetFollowingList(targetUID, &currentUID)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"status_code": 1, "status_msg": "获取关注列表失败", "user_list": []any{}})
+		respondError(c, "获取关注列表失败", gin.H{"user_list": []any{}})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"status_code": 0,
-		"status_msg":  "获取成功",
-		"user_list":   list,
+	respondSuccess(c, "获取成功", gin.H{
+		"user_list": list,
 	})
 }
 
@@ -172,14 +182,12 @@ func GetFollowerList(c *gin.Context) {
 
 	list, err := service.GetFollowerList(targetUID, &currentUID)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"status_code": 1, "status_msg": "获取粉丝列表失败", "user_list": []any{}})
+		respondError(c, "获取粉丝列表失败", gin.H{"user_list": []any{}})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"status_code": 0,
-		"status_msg":  "获取成功",
-		"user_list":   list,
+	respondSuccess(c, "获取成功", gin.H{
+		"user_list": list,
 	})
 }
 
@@ -189,17 +197,14 @@ func UpdatePassword(c *gin.Context) {
 
 	var req PasswordChangeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"status_code": 1, "status_msg": "参数错误"})
+		respondError(c, "参数错误", nil)
 		return
 	}
 
 	if err := service.ChangePassword(uid, req.OldPassword, req.NewPassword); err != nil {
-		c.JSON(http.StatusOK, gin.H{"status_code": 1, "status_msg": err.Error()})
+		respondError(c, err.Error(), nil)
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"status_code": 0,
-		"status_msg":  "修改密码成功",
-	})
+	respondSuccess(c, "修改密码成功", nil)
 }

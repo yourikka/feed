@@ -52,9 +52,9 @@ export const addComment = (data) => {
  * @param {Number} videoId 视频ID
  * @returns 后端返回的评论列表
  */
-export const getComments = (videoId) => {
+export const getComments = (videoId, params = {}) => {
   return request.get('/comment/list/', {
-    params: { video_id: videoId }
+    params: { video_id: videoId, ...params }
   })
 }
 

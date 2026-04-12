@@ -36,7 +36,7 @@
                 :class="{ active: video.IsLiked }"
                 @click="handleLike(video)"
               >
-                <el-icon><HeartFilled /></el-icon>
+                <el-icon><Pointer /></el-icon>
               </button>
               <button
                 type="button"

@@ -36,8 +36,8 @@ export const deleteVideo = (videoId) => {
 /**
  * 获取用户发布的视频列表（预留，个人中心用）
  */
-export const getUserVideoList = (userId) => {
+export const getUserVideoList = (userId, params = {}) => {
   return request.get('/user/video/list/', {
-    params: { user_id: userId }
+    params: { user_id: userId, ...params }
   })
 }
