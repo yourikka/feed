@@ -3,13 +3,18 @@ package util
 import (
 	"errors"
 	"os"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// 签名密钥 (实际开发请放环境变量，不要硬编码)
-var jwtSecret = []byte(getJWTSecret())
+var (
+	jwtSecretOnce sync.Once
+	jwtSecret     []byte
+	jwtSecretErr  error
+)
 
 // Claims 自定义Token结构
 type Claims struct {
@@ -19,6 +24,11 @@ type Claims struct {
 
 // GenerateToken 生成Token
 func GenerateToken(userID uint) (string, error) {
+	secret, err := getJWTSecret()
+	if err != nil {
+		return "", err
+	}
+
 	now := time.Now()
 	expire := now.Add(24 * time.Hour) // Token 24小时后过期
 
@@ -31,13 +41,18 @@ func GenerateToken(userID uint) (string, error) {
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString(jwtSecret)
+	return token.SignedString(secret)
 }
 
 // ParseToken 解析Token
 func ParseToken(tokenString string) (*Claims, error) {
+	secret, err := getJWTSecret()
+	if err != nil {
+		return nil, err
+	}
+
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
-		return jwtSecret, nil
+		return secret, nil
 	})
 
 	if err != nil {
@@ -51,9 +66,14 @@ func ParseToken(tokenString string) (*Claims, error) {
 	return nil, errors.New("invalid token")
 }
 
-func getJWTSecret() string {
-	if secret := os.Getenv("JWT_SECRET"); secret != "" {
-		return secret
-	}
-	return "my_douyin_secret_key"
+func getJWTSecret() ([]byte, error) {
+	jwtSecretOnce.Do(func() {
+		secret := strings.TrimSpace(os.Getenv("JWT_SECRET"))
+		if len(secret) < 32 {
+			jwtSecretErr = errors.New("JWT_SECRET must be set and at least 32 characters")
+			return
+		}
+		jwtSecret = []byte(secret)
+	})
+	return jwtSecret, jwtSecretErr
 }

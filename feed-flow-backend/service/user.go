@@ -2,11 +2,16 @@ package service
 
 import (
 	"errors"
+	"regexp"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/yourikka/feed-flow/config"
 	"github.com/yourikka/feed-flow/model"
 	"github.com/yourikka/feed-flow/util"
 )
+
+var usernamePattern = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
 
 type UserStats struct {
 	WorkCount         int64 `json:"work_count"`
@@ -24,13 +29,24 @@ type RelationUser struct {
 
 // Register 注册用户
 func Register(username, password string) (user *model.User, err error) {
+	username = strings.TrimSpace(username)
+	if err = validateUsername(username); err != nil {
+		return nil, err
+	}
+	if err = validatePassword(password); err != nil {
+		return nil, err
+	}
+
 	//检查用户名是否存在
 	var existingUser model.User
 	if err = config.DB.Where("username = ?", username).First(&existingUser).Error; err == nil {
 		return nil, errors.New("用户名已存在")
 	}
 	//加密密码
-	hashedPwd, _ := util.HashPassword(password)
+	hashedPwd, err := util.HashPassword(password)
+	if err != nil {
+		return nil, errors.New("密码加密失败")
+	}
 
 	//创建用户
 	user = &model.User{
@@ -47,6 +63,11 @@ func Register(username, password string) (user *model.User, err error) {
 
 // Login 登录用户
 func Login(username, password string) (user *model.User, err error) {
+	username = strings.TrimSpace(username)
+	if username == "" || password == "" {
+		return nil, errors.New("用户名和密码不能为空")
+	}
+
 	//检查用户名是否存在
 
 	if err = config.DB.Where("username = ?", username).First(&user).Error; err != nil {
@@ -171,6 +192,9 @@ func ChangePassword(userID uint, oldPassword, newPassword string) error {
 	if oldPassword == newPassword {
 		return errors.New("新密码不能和原密码一致")
 	}
+	if err := validatePassword(newPassword); err != nil {
+		return err
+	}
 
 	var user model.User
 	if err := config.DB.Where("id = ?", userID).First(&user).Error; err != nil {
@@ -186,4 +210,23 @@ func ChangePassword(userID uint, oldPassword, newPassword string) error {
 	}
 
 	return config.DB.Model(&model.User{}).Where("id = ?", userID).Update("password", hashedPwd).Error
+}
+
+func validateUsername(username string) error {
+	length := utf8.RuneCountInString(username)
+	if length < 3 || length > 20 {
+		return errors.New("用户名长度需在 3 到 20 个字符之间")
+	}
+	if !usernamePattern.MatchString(username) {
+		return errors.New("用户名只能包含字母、数字和下划线")
+	}
+	return nil
+}
+
+func validatePassword(password string) error {
+	length := utf8.RuneCountInString(password)
+	if length < 8 || length > 64 {
+		return errors.New("密码长度需在 8 到 64 个字符之间")
+	}
+	return nil
 }

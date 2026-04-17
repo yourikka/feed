@@ -1,0 +1,41 @@
+name: feed-ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  backend-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: feed-flow-backend
+    env:
+      JWT_SECRET: 0123456789abcdef0123456789abcdef
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: Run backend tests
+        run: go test ./...
+
+  frontend-build-and-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: feed-flow-frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: feed-flow-frontend/package-lock.json
+      - name: Install frontend deps
+        run: npm ci
+      - name: Build frontend
+        run: npm run build
+      - name: Run frontend tests
+        run: npm run test

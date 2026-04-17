@@ -115,6 +115,8 @@ const handlePublish = async () => {
       ElMessage.success('发布成功')
       router.push('/feed')
     } else ElMessage.error(res.status_msg || '发布失败')
+  } catch (error) {
+    ElMessage.error(error.response?.data?.status_msg || '发布失败，请稍后重试')
   } finally { loading.value = false }
 }
 </script>

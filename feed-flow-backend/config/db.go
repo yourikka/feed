@@ -14,7 +14,10 @@ import (
 var DB *gorm.DB
 
 func InitDB() {
-	dsn := getEnv("MYSQL_DSN", "root:root123@tcp(mysql:3306)/douyin?charset=utf8mb4&parseTime=True&loc=Local")
+	dsn := os.Getenv("MYSQL_DSN")
+	if dsn == "" {
+		log.Fatal("MYSQL_DSN is required")
+	}
 	var err error
 	DB, err = gorm.Open(mysql.Open(dsn), &gorm.Config{})
 	if err != nil {

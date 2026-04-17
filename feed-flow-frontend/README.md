@@ -1,5 +1,13 @@
-# Vue 3 + Vite
+# Feed Flow Frontend
 
-This template should help get you started developing with Vue 3 in Vite. The template uses Vue 3 `<script setup>` SFCs, check out the [script setup docs](https://v3.vuejs.org/api/sfc-script-setup.html#sfc-script-setup) to learn more.
+## Scripts
 
-Learn more about IDE Support for Vue in the [Vue Docs Scaling up Guide](https://vuejs.org/guide/scaling-up/tooling.html#ide-support).
+- `npm run dev`: 启动开发服务
+- `npm run build`: 生产构建
+- `npm run preview`: 本地预览构建产物
+- `npm run test`: 运行前端单元测试
+
+## Notes
+
+- 默认通过 Vite 代理请求 `/douyin` 和 `/uploads` 到 `http://localhost:8080`
+- 路由采用懒加载分包，减少首屏 JS 体积

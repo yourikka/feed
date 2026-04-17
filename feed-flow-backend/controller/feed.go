@@ -4,6 +4,7 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"github.com/yourikka/feed-flow/service"
@@ -63,8 +64,13 @@ func PublishVideo(c *gin.Context) {
 	uid, _ := userID.(uint)
 
 	title := c.PostForm("title")
+	title = strings.TrimSpace(title)
 	if title == "" {
 		respondError(c, "标题不能为空", nil)
+		return
+	}
+	if utf8.RuneCountInString(title) > 50 {
+		respondError(c, "标题不能超过 50 个字符", nil)
 		return
 	}
 

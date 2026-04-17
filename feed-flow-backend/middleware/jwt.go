@@ -13,7 +13,7 @@ func JWAuth() gin.HandlerFunc {
 		//从Header中获取Token
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "未登录"})
+			c.JSON(http.StatusUnauthorized, gin.H{"status_code": 1, "status_msg": "未登录"})
 			c.Abort()
 			return
 		}
@@ -21,7 +21,7 @@ func JWAuth() gin.HandlerFunc {
 		//解析Token(格式: Bearer token)
 		parts := strings.SplitN(authHeader, " ", 2)
 		if !(len(parts) == 2 && parts[0] == "Bearer") {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Token格式错误"})
+			c.JSON(http.StatusUnauthorized, gin.H{"status_code": 1, "status_msg": "Token格式错误"})
 			c.Abort()
 			return
 		}
@@ -29,7 +29,7 @@ func JWAuth() gin.HandlerFunc {
 		//验证Token
 		claims, err := util.ParseToken(parts[1])
 		if err != nil {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Token无效"})
+			c.JSON(http.StatusUnauthorized, gin.H{"status_code": 1, "status_msg": "Token无效"})
 			c.Abort()
 			return
 		}

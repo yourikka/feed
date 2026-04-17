@@ -45,6 +45,7 @@ import { reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { login, register } from '../api/user'
 import { ElMessage } from 'element-plus'
+import { validatePassword, validateUsername } from '../utils/auth'
 
 const router = useRouter()
 const loading = ref(false)
@@ -56,6 +57,11 @@ const form = reactive({
 
 const handleLogin = async () => {
   if (!form.username || !form.password) return ElMessage.warning('请输入用户名和密码')
+  const usernameErr = validateUsername(form.username)
+  if (usernameErr) return ElMessage.warning(usernameErr)
+  const passwordErr = validatePassword(form.password)
+  if (passwordErr) return ElMessage.warning(passwordErr)
+
   loading.value = true
   try {
     const res = await login(form)
@@ -65,11 +71,18 @@ const handleLogin = async () => {
       ElMessage.success('登录成功')
       router.push('/feed')
     } else ElMessage.error(res.status_msg)
+  } catch (error) {
+    ElMessage.error(error.response?.data?.status_msg || '登录失败，请稍后重试')
   } finally { loading.value = false }
 }
 
 const handleRegister = async () => {
   if (!form.username || !form.password) return ElMessage.warning('请输入用户名和密码')
+  const usernameErr = validateUsername(form.username)
+  if (usernameErr) return ElMessage.warning(usernameErr)
+  const passwordErr = validatePassword(form.password)
+  if (passwordErr) return ElMessage.warning(passwordErr)
+
   registerLoading.value = true
   try {
     const res = await register(form)
@@ -79,6 +92,8 @@ const handleRegister = async () => {
       ElMessage.success('注册成功')
       router.push('/feed')
     } else ElMessage.error(res.status_msg)
+  } catch (error) {
+    ElMessage.error(error.response?.data?.status_msg || '注册失败，请稍后重试')
   } finally { registerLoading.value = false }
 }
 </script>

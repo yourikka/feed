@@ -56,6 +56,7 @@ import { reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { changePassword } from '../api/user'
+import { validatePassword } from '../utils/auth'
 
 const router = useRouter()
 const saving = ref(false)
@@ -80,6 +81,8 @@ const handleChangePassword = async () => {
   if (passwordForm.newPassword !== passwordForm.confirmPassword) {
     return ElMessage.warning('两次输入的新密码不一致')
   }
+  const passwordErr = validatePassword(passwordForm.newPassword)
+  if (passwordErr) return ElMessage.warning(passwordErr)
 
   saving.value = true
   try {

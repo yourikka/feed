@@ -13,7 +13,7 @@ type User struct {
 
 type Video struct {
 	gorm.Model
-	Title    string `gorm:"size:20"` //视频标题
+	Title    string `gorm:"size:50"` //视频标题
 	PlayUrl  string //视频播放地址
 	CoverUrl string //视频封面地址
 	AuthorID uint   `gorm:"index"`               //视频作者ID

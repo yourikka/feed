@@ -4,14 +4,14 @@ services:
     container_name: feed-mysql
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: root123
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is required}
       MYSQL_DATABASE: douyin
     ports:
       - "3306:3306"
     volumes:
       - mysql-data:/var/lib/mysql
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-proot123"]
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -p$${MYSQL_ROOT_PASSWORD}"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -50,15 +50,15 @@ services:
     restart: unless-stopped
     environment:
       PORT: 8080
-      MYSQL_DSN: root:root123@tcp(mysql:3306)/douyin?charset=utf8mb4&parseTime=True&loc=Local
+      MYSQL_DSN: ${MYSQL_DSN:?MYSQL_DSN is required}
       DB_AUTO_MIGRATE: "true"
       REDIS_ADDR: redis:6379
       REDIS_PASSWORD: ""
-      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      RABBITMQ_URL: ${RABBITMQ_URL:-amqp://guest:guest@rabbitmq:5672/}
       RABBITMQ_FORCE_REDECLARE: "false"
       RABBITMQ_PREFETCH: "20"
       RABBITMQ_RETRY_TTL_MS: "5000"
-      JWT_SECRET: my_douyin_secret_key
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
     ports:
       - "8080:8080"
     volumes:

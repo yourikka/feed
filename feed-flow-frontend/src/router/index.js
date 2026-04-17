@@ -1,11 +1,11 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
 
-import Login from '../views/Login.vue'
-import Feed from '../views/Feed.vue'
-import Publish from '../views/Publish.vue'
-import Profile from '../views/Profile.vue'
-import RelationList from '../views/RelationList.vue'
-import Settings from '../views/Settings.vue'
+const Login = () => import('../views/Login.vue')
+const Feed = () => import('../views/Feed.vue')
+const Publish = () => import('../views/Publish.vue')
+const Profile = () => import('../views/Profile.vue')
+const RelationList = () => import('../views/RelationList.vue')
+const Settings = () => import('../views/Settings.vue')
 
 const routes = [
   {
