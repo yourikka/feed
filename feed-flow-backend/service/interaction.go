@@ -7,6 +7,7 @@ import (
 	mysqlDriver "github.com/go-sql-driver/mysql"
 	"github.com/yourikka/feed-flow/config"
 	"github.com/yourikka/feed-flow/model"
+	"github.com/yourikka/feed-flow/ranking"
 	"gorm.io/gorm"
 )
 
@@ -40,6 +41,7 @@ func LikeVideo(videoId, userId uint) (bool, error) {
 			return false, delErr
 		}
 		adjustVideoStatsCache(videoId, videoStatsLikeField, -1)
+		ranking.RecordHotEvent(videoId, -ranking.ScoreLike)
 		return false, nil
 	}
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -57,6 +59,7 @@ func LikeVideo(videoId, userId uint) (bool, error) {
 	}
 	if err == nil {
 		adjustVideoStatsCache(videoId, videoStatsLikeField, 1)
+		ranking.RecordHotEvent(videoId, ranking.ScoreLike)
 	}
 	return true, err
 }
@@ -70,6 +73,7 @@ func FavoriteVideo(videoId, userId uint) (bool, error) {
 			return false, delErr
 		}
 		adjustVideoStatsCache(videoId, videoStatsFavoriteField, -1)
+		ranking.RecordHotEvent(videoId, -ranking.ScoreFavorite)
 		return false, nil
 	}
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -87,6 +91,7 @@ func FavoriteVideo(videoId, userId uint) (bool, error) {
 	}
 	if err == nil {
 		adjustVideoStatsCache(videoId, videoStatsFavoriteField, 1)
+		ranking.RecordHotEvent(videoId, ranking.ScoreFavorite)
 	}
 	return true, err
 }
@@ -132,6 +137,7 @@ func CommentVideo(videoId, userId uint, content string) error {
 	}).Error
 	if err == nil {
 		adjustVideoStatsCache(videoId, videoStatsCommentField, 1)
+		ranking.RecordHotEvent(videoId, ranking.ScoreComment)
 	}
 	return err
 }
@@ -194,5 +200,6 @@ func DeleteComment(commentID, operatorID uint) error {
 		return err
 	}
 	adjustVideoStatsCache(comment.VideoID, videoStatsCommentField, -1)
+	ranking.RecordHotEvent(comment.VideoID, -ranking.ScoreComment)
 	return nil
 }

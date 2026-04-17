@@ -17,7 +17,8 @@ import (
 const (
 	// 图片类型
 	AllowImageType = ".jpg,.jpeg,.png,.gif"
-	MaxImageSize   = 5 * 1024 * 1024 // 5MB
+	MaxImageSize   = 5 * 1024 * 1024  // 5MB（头像等通用图片）
+	MaxCoverSize   = 20 * 1024 * 1024 // 20MB（视频封面）
 	// 视频类型
 	AllowVideoType = ".mp4,.avi,.mov,.mkv"
 	MaxVideoSize   = 1024 * 1024 * 1024 // 1GB

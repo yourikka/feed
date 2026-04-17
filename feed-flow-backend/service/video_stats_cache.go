@@ -21,11 +21,15 @@ type videoStats struct {
 
 const (
 	videoStatsCacheKeyPrefix = "video:stats:"
+	videoStatsLockKeyPrefix  = "video:stats:lock:"
 	videoStatsLikeField      = "like_count"
 	videoStatsCommentField   = "comment_count"
 	videoStatsFavoriteField  = "favorite_count"
 	videoStatsCacheTTL       = 10 * time.Minute
 	videoStatsCacheTTLJitter = 2 * time.Minute
+	videoStatsLockTTL        = 3 * time.Second
+	videoStatsLockWaitStep   = 60 * time.Millisecond
+	videoStatsLockWaitMax    = 3
 )
 
 type videoStatsBatchLoadCall struct {
@@ -293,14 +297,91 @@ func getVideoStatsBatch(videoIDs []uint) (map[uint]videoStats, error) {
 		return result, nil
 	}
 
-	dbStats, err := loadAndCacheVideoStats(missIDs)
-	if err != nil {
-		return nil, err
+	idsToQuery := missIDs
+	var acquiredLockKeys []string
+	if config.RDB != nil {
+		ownerIDs := make([]uint, 0, len(missIDs))
+		waitIDs := make([]uint, 0, len(missIDs))
+		acquiredLockKeys = make([]string, 0, len(missIDs))
+
+		for _, videoID := range missIDs {
+			lockKey, ok := tryAcquireVideoStatsLock(videoID)
+			if !ok {
+				waitIDs = append(waitIDs, videoID)
+				continue
+			}
+			acquiredLockKeys = append(acquiredLockKeys, lockKey)
+			ownerIDs = append(ownerIDs, videoID)
+		}
+		defer releaseVideoStatsLocks(acquiredLockKeys)
+
+		idsToQuery = ownerIDs
+		if len(waitIDs) > 0 {
+			readyStats, unresolved := waitVideoStatsFromCache(waitIDs)
+			for videoID, stats := range readyStats {
+				result[videoID] = stats
+			}
+			idsToQuery = append(idsToQuery, unresolved...)
+		}
 	}
 
-	for _, videoID := range missIDs {
-		result[videoID] = dbStats[videoID]
+	if len(idsToQuery) > 0 {
+		dbStats, err := loadAndCacheVideoStats(idsToQuery)
+		if err != nil {
+			return nil, err
+		}
+		for _, videoID := range idsToQuery {
+			result[videoID] = dbStats[videoID]
+		}
 	}
 
 	return result, nil
+}
+
+func tryAcquireVideoStatsLock(videoID uint) (string, bool) {
+	if config.RDB == nil || videoID == 0 {
+		return "", false
+	}
+	lockKey := fmt.Sprintf("%s%d", videoStatsLockKeyPrefix, videoID)
+	locked, err := config.RDB.SetNX(config.Ctx, lockKey, "1", videoStatsLockTTL).Result()
+	if err != nil || !locked {
+		return "", false
+	}
+	return lockKey, true
+}
+
+func releaseVideoStatsLocks(lockKeys []string) {
+	if config.RDB == nil || len(lockKeys) == 0 {
+		return
+	}
+	for _, lockKey := range lockKeys {
+		_ = config.RDB.Del(config.Ctx, lockKey).Err()
+	}
+}
+
+func waitVideoStatsFromCache(videoIDs []uint) (map[uint]videoStats, []uint) {
+	pending := normalizeVideoIDs(videoIDs)
+	ready := make(map[uint]videoStats, len(videoIDs))
+	if len(pending) == 0 {
+		return ready, []uint{}
+	}
+
+	for attempt := 0; attempt < videoStatsLockWaitMax; attempt++ {
+		nextPending := make([]uint, 0, len(pending))
+		for _, videoID := range pending {
+			stats, ok := getVideoStatsFromCache(videoID)
+			if ok {
+				ready[videoID] = stats
+				continue
+			}
+			nextPending = append(nextPending, videoID)
+		}
+		if len(nextPending) == 0 {
+			return ready, []uint{}
+		}
+		pending = nextPending
+		time.Sleep(videoStatsLockWaitStep)
+	}
+
+	return ready, pending
 }

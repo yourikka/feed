@@ -10,6 +10,7 @@ import (
 
 	"github.com/rabbitmq/amqp091-go"
 	"github.com/yourikka/feed-flow/config"
+	"github.com/yourikka/feed-flow/ranking"
 )
 
 const (
@@ -31,13 +32,21 @@ func PublishVideo(videoID uint) {
 	)
 	if err != nil {
 		log.Println("mq发送消息失败:", err)
+		if syncErr := processVideoPublish(int(videoID)); syncErr != nil {
+			log.Printf("mq降级同步处理失败 video_id=%d err=%v", videoID, syncErr)
+		}
 	}
 }
 
 func ConsumerVideoMQ() {
 	log.Println("mq消费者启动成功")
+	consumeCh := config.GetRabbitConsumeChannel()
+	if consumeCh == nil {
+		log.Println("mq消费者不可用：RabbitMQ channel 未就绪")
+		return
+	}
 
-	msgs, err := config.RabbitConsumeCh.Consume(
+	msgs, err := consumeCh.Consume(
 		config.VideoPublishQueue,
 		"",
 		false,
@@ -58,9 +67,14 @@ func ConsumerVideoMQ() {
 
 func ConsumerVideoMQWithContext(ctx context.Context) {
 	log.Println("mq消费者启动成功")
+	consumeCh := config.GetRabbitConsumeChannel()
+	if consumeCh == nil {
+		log.Println("mq消费者不可用：RabbitMQ channel 未就绪")
+		return
+	}
 
 	consumerTag := fmt.Sprintf("video_publish_consumer_%d", time.Now().UnixNano())
-	msgs, err := config.RabbitConsumeCh.Consume(
+	msgs, err := consumeCh.Consume(
 		config.VideoPublishQueue,
 		consumerTag,
 		false,
@@ -78,7 +92,7 @@ func ConsumerVideoMQWithContext(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			log.Println("mq消费者收到停止信号，准备退出")
-			if err := config.RabbitConsumeCh.Cancel(consumerTag, false); err != nil {
+			if err := consumeCh.Cancel(consumerTag, false); err != nil {
 				log.Printf("mq取消消费者失败: %v", err)
 			}
 			return
@@ -119,11 +133,7 @@ func processVideoPublish(videoID int) error {
 	}
 
 	log.Println("收到mq消息,处理视频发布:", videoID)
-	// ========== 这里写你的异步业务逻辑 ==========
-	// 1. 视频审核
-	// 2. 热度统计
-	// 3. 粉丝推送
-	// 4. 搜索索引构建
+	ranking.RecordHotEvent(uint(videoID), ranking.ScorePublish)
 	return nil
 }
 
@@ -205,7 +215,12 @@ func publishToDLQ(msg amqp091.Delivery, retryCount int, cause error) error {
 }
 
 func publishMessage(exchange, routingKey string, publishing amqp091.Publishing) error {
-	ch, err := config.RabbitConn.Channel()
+	conn := config.GetRabbitConn()
+	if conn == nil || conn.IsClosed() {
+		return errors.New("rabbitmq unavailable")
+	}
+
+	ch, err := conn.Channel()
 	if err != nil {
 		return err
 	}

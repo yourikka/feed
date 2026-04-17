@@ -48,7 +48,7 @@
             <img v-if="form.cover" :src="coverPreview" class="cover-preview" />
             <el-icon v-else class="cover-uploader-icon"><Plus /></el-icon>
             <template #tip>
-              <div class="el-upload__tip">支持 jpg/png 格式，建议尺寸 16:9</div>
+              <div class="el-upload__tip">支持 jpg/png 格式，建议尺寸 16:9，最大 20MB</div>
             </template>
           </el-upload>
         </el-form-item>
@@ -70,6 +70,7 @@ import { publishVideo } from '../api/feed'
 import { ElMessage } from 'element-plus'
 
 const MAX_VIDEO_SIZE = 1024 * 1024 * 1024
+const MAX_COVER_SIZE = 20 * 1024 * 1024
 
 const router = useRouter()
 const loading = ref(false)
@@ -93,6 +94,10 @@ const handleVideoChange = (file) => {
 
 // 处理封面选择
 const handleCoverChange = (file) => {
+  if (file.raw.size > MAX_COVER_SIZE) {
+    ElMessage.error('封面大小不能超过 20MB')
+    return
+  }
   form.cover = file.raw
   coverPreview.value = URL.createObjectURL(file.raw)
 }

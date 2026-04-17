@@ -30,7 +30,21 @@ func main() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		mq.ConsumerVideoMQWithContext(ctx)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
+			mq.ConsumerVideoMQWithContext(ctx)
+
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(3 * time.Second):
+			}
+		}
 	}()
 
 	//初始化路由

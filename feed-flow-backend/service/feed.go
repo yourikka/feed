@@ -2,10 +2,12 @@ package service
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/yourikka/feed-flow/config"
 	"github.com/yourikka/feed-flow/model"
 	"github.com/yourikka/feed-flow/mq"
+	"github.com/yourikka/feed-flow/ranking"
 	"github.com/yourikka/feed-flow/util"
 	"gorm.io/gorm"
 )
@@ -81,10 +83,37 @@ func PublishVideo(title, playUrl, coverUrl string, authorId uint) error {
 	if err := config.DB.Create(&video).Error; err != nil {
 		return err
 	}
+	ranking.RecordHotEvent(video.ID, ranking.ScorePublish)
 	// 发布视频到mq
 	mq.PublishVideo(video.ID)
 	return nil
 
+}
+
+func getVideosByIDsOrdered(videoIDs []uint) ([]model.Video, error) {
+	if len(videoIDs) == 0 {
+		return []model.Video{}, nil
+	}
+
+	var videos []model.Video
+	if err := config.DB.Preload("Author").Where("id IN ?", videoIDs).Find(&videos).Error; err != nil {
+		return nil, err
+	}
+
+	videoMap := make(map[uint]model.Video, len(videos))
+	for _, video := range videos {
+		videoMap[video.ID] = video
+	}
+
+	ordered := make([]model.Video, 0, len(videoIDs))
+	for _, id := range videoIDs {
+		video, ok := videoMap[id]
+		if !ok {
+			continue
+		}
+		ordered = append(ordered, video)
+	}
+	return ordered, nil
 }
 
 // DeleteVideo 删除作者自己的视频及其关联数据
@@ -224,8 +253,7 @@ func buildFeedVideos(videos []model.Video, userID *uint) ([]FeedVideo, error) {
 	return feedVideos, nil
 }
 
-// GetVideoFeed 获取视频流数据和交互状态
-func GetVideoFeed(userID *uint, cursor uint, limit int) ([]FeedVideo, uint, bool, error) {
+func getLatestVideoFeed(userID *uint, cursor uint, limit int) ([]FeedVideo, uint, bool, error) {
 	limit = normalizeFeedLimit(limit)
 
 	query := config.DB.Preload("Author").Order("id desc")
@@ -255,6 +283,61 @@ func GetVideoFeed(userID *uint, cursor uint, limit int) ([]FeedVideo, uint, bool
 	}
 
 	return feedVideos, nextCursor, hasMore, nil
+}
+
+func getHotVideoFeed(userID *uint, cursor uint, limit int) ([]FeedVideo, uint, bool, error) {
+	limit = normalizeFeedLimit(limit)
+	offset := int(cursor)
+
+	videoIDs, total, err := ranking.GetHotVideoIDs(offset, limit)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	if len(videoIDs) == 0 {
+		return []FeedVideo{}, 0, false, nil
+	}
+
+	videos, err := getVideosByIDsOrdered(videoIDs)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	if len(videos) == 0 {
+		return []FeedVideo{}, 0, false, nil
+	}
+
+	feedVideos, err := buildFeedVideos(videos, userID)
+	if err != nil {
+		return nil, 0, false, err
+	}
+
+	next := offset + len(feedVideos)
+	hasMore := int64(next) < total
+	nextCursor := uint(0)
+	if hasMore {
+		nextCursor = uint(next)
+	}
+	return feedVideos, nextCursor, hasMore, nil
+}
+
+// GetVideoFeed 获取视频流数据和交互状态
+func GetVideoFeed(userID *uint, cursor uint, limit int) ([]FeedVideo, uint, bool, error) {
+	return GetVideoFeedBySort(userID, cursor, limit, "latest")
+}
+
+func GetVideoFeedBySort(userID *uint, cursor uint, limit int, sortType string) ([]FeedVideo, uint, bool, error) {
+	switch strings.ToLower(strings.TrimSpace(sortType)) {
+	case "", "latest":
+		return getLatestVideoFeed(userID, cursor, limit)
+	case "hot":
+		videos, next, more, err := getHotVideoFeed(userID, cursor, limit)
+		if err != nil {
+			// 热榜依赖 Redis，异常时自动降级回最新流。
+			return getLatestVideoFeed(userID, cursor, limit)
+		}
+		return videos, next, more, nil
+	default:
+		return getLatestVideoFeed(userID, cursor, limit)
+	}
 }
 
 // GetUserVideoList 获取用户作品列表

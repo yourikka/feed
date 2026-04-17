@@ -42,7 +42,17 @@ func Feed(c *gin.Context) {
 		return
 	}
 
-	videos, nextCursor, hasMore, err := service.GetVideoFeed(userID, uint(cursor), limit)
+	sortType := strings.ToLower(strings.TrimSpace(c.DefaultQuery("sort", "latest")))
+	if sortType != "latest" && sortType != "hot" {
+		respondError(c, "sort 参数错误，支持 latest/hot", gin.H{
+			"video_list":  []any{},
+			"next_cursor": 0,
+			"has_more":    false,
+		})
+		return
+	}
+
+	videos, nextCursor, hasMore, err := service.GetVideoFeedBySort(userID, uint(cursor), limit, sortType)
 	if err != nil {
 		respondError(c, "获取视频流失败", gin.H{
 			"video_list":  []any{},
@@ -82,7 +92,7 @@ func PublishVideo(c *gin.Context) {
 	}
 
 	// 上传封面
-	coverUrl, err := util.SaveUploadedFile(c, "cover", "cover", util.AllowImageType, util.MaxImageSize)
+	coverUrl, err := util.SaveUploadedFile(c, "cover", "cover", util.AllowImageType, util.MaxCoverSize)
 	if err != nil {
 		if cleanupErr := util.DeleteUploadedFile(playUrl); cleanupErr != nil {
 			log.Printf("cleanup uploaded video failed: %v", cleanupErr)
