@@ -113,7 +113,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { getFeedList, trackFeedEvent } from '../api/feed'
+import { getFeedDetails, getFeedIDs, trackFeedEvent } from '../api/feed'
 import { favoriteVideo, followUser, likeVideo } from '../api/interaction'
 import CommentDialog from '../components/CommentDialog.vue'
 import { ElMessage } from 'element-plus'
@@ -132,6 +132,8 @@ const loadingMore = ref(false)
 const hasMore = ref(true)
 const cursor = ref(0)
 const cursorToken = ref('')
+const nextIDCursor = ref(0)
+const nextIDToken = ref('')
 const videoList = ref([])
 const showComment = ref(false)
 const currentVideoId = ref(0)
@@ -177,11 +179,25 @@ const getFeedParams = (reset) => {
   return params
 }
 
+const getFeedIDParams = (reset) => {
+  const params = {
+    limit: 10,
+    sort: sortType.value,
+    filter_seen: 1,
+    client_id: ensureClientId()
+  }
+  if (!reset && nextIDCursor.value) params.cursor = nextIDCursor.value
+  if (!reset && nextIDToken.value) params.cursor_token = nextIDToken.value
+  return params
+}
+
 const fetchList = async (reset = true) => {
   if (reset) {
     loading.value = true
     cursor.value = 0
     cursorToken.value = ''
+    nextIDCursor.value = 0
+    nextIDToken.value = ''
     hasMore.value = true
     activeIndex.value = -1
     clearExposureTimers()
@@ -197,7 +213,24 @@ const fetchList = async (reset = true) => {
   }
 
   try {
-    const res = await getFeedList(getFeedParams(reset))
+    const idRes = await getFeedIDs(getFeedIDParams(reset))
+    if (idRes.status_code !== 0) {
+      ElMessage.error(idRes.status_msg || '获取视频列表失败')
+      return
+    }
+
+    const ids = Array.isArray(idRes.video_ids) ? idRes.video_ids : []
+    if (ids.length === 0) {
+      if (reset) videoList.value = []
+      nextIDCursor.value = Number(idRes.next_cursor || 0)
+      nextIDToken.value = idRes.next_token || ''
+      cursor.value = nextIDCursor.value
+      cursorToken.value = nextIDToken.value
+      hasMore.value = !!idRes.has_more
+      return
+    }
+
+    const res = await getFeedDetails(ids)
     if (res.status_code !== 0) {
       ElMessage.error(res.status_msg || '获取视频列表失败')
       return
@@ -205,9 +238,11 @@ const fetchList = async (reset = true) => {
 
     const list = Array.isArray(res.video_list) ? res.video_list : []
     videoList.value = reset ? list : [...videoList.value, ...list]
-    cursor.value = Number(res.next_cursor || 0)
-    cursorToken.value = res.next_token || ''
-    hasMore.value = !!res.has_more
+    nextIDCursor.value = Number(idRes.next_cursor || 0)
+    nextIDToken.value = idRes.next_token || ''
+    cursor.value = nextIDCursor.value
+    cursorToken.value = nextIDToken.value
+    hasMore.value = !!idRes.has_more
 
     await nextTick()
     initObserver()
@@ -284,15 +319,9 @@ const attemptPlay = async (index) => {
 }
 
 const preloadNeighbors = (index) => {
-  ;[index + 1, index + 2].forEach((targetIndex) => {
-    const videoEl = videoRefs[targetIndex]
-    if (!videoEl) return
-    try {
-      videoEl.load()
-    } catch (error) {
-      console.error('预加载失败', error)
-    }
-  })
+  if (index >= videoList.value.length - 3 && hasMore.value && !loadingMore.value) {
+    fetchList(false)
+  }
 }
 
 const setActiveVideo = async (index) => {

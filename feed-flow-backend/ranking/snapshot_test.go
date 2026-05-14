@@ -1,8 +1,11 @@
 package ranking
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestHotSnapshotCursorRoundTrip(t *testing.T) {
+	t.Setenv("JWT_SECRET", "0123456789abcdef0123456789abcdef")
 	token := EncodeHotSnapshotCursor(HotSnapshotCursor{
 		AggKey:  "feed:hot:agg:test",
 		Offset:  20,

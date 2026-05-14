@@ -46,6 +46,11 @@ func main() {
 			}
 		}
 	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		service.StartBehaviorEventWorker(ctx)
+	}()
 
 	//初始化路由
 	r := router.SetupRouter()

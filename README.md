@@ -14,10 +14,13 @@
 ## Feed API Notes
 
 - `GET /douyin/feed/?sort=latest|hot&cursor=<n>&limit=<n>`
+- `GET /douyin/feed/ids/?sort=latest|hot&cursor_token=<token>&limit=<n>` 先获取视频 ID 列表
+- `GET /douyin/feed/details/?video_ids=1,2,3` 按 ID 批量取视频详情
 - `sort=latest` 使用时间倒序游标分页
 - `sort=hot` 使用滑动窗口热榜（Redis ZSet，`cursor` 为偏移量）
 - 新版前端优先使用 `cursor_token` 翻页，后端响应 `next_token`
 - `GET /douyin/feed/` 支持 `client_id`、`filter_seen=1`，可做曝光去重与已曝光过滤
+- 前端预加载改成“先拉 ID，再按 ID 从 Redis/接口回填详情”，避免直接预取完整视频列表
 - `POST /douyin/feed/event/` 用于上报 `exposure/play_start/play_progress/play_finish/pause/skip`
 
 ## Start

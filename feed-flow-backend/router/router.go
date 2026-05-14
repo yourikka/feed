@@ -17,6 +17,8 @@ func SetupRouter() *gin.Engine {
 		public.POST("/user/register/", controller.Register)
 		public.POST("/user/login/", controller.Login)
 		public.GET("/feed/", controller.Feed)
+		public.GET("/feed/ids/", controller.FeedIDs)
+		public.GET("/feed/details/", controller.FeedDetails)
 		public.POST("/feed/event/", controller.TrackVideoEvent)
 		public.GET("/comment/list/", controller.GetComment)
 	}

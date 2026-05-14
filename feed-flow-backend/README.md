@@ -6,6 +6,7 @@
 - `JWT_SECRET` (at least 32 chars)
 - `FEED_HOT_WINDOW_HOURS` (optional, default `24`)
 - `DB_AUTO_MIGRATE` (optional, `true` 时自动创建 `video_behavior_events` 等表)
+- `SNAPSHOT_SECRET` (optional, 不配时回退到 `JWT_SECRET`，用于热榜快照 token 签名)
 
 ## Runtime Notes
 
@@ -13,8 +14,11 @@
 - 发布事件优先走 MQ；MQ 不可用时会同步兜底处理
 - 热榜使用 Redis 滑动窗口聚合（按小时桶）
 - Feed 支持基于 `client_id/user_id` 的曝光去重和最近曝光过滤
-- 热榜分页支持快照 token，避免动态榜单 offset 翻页重复/漏数
+- 热榜分页支持带签名的快照 token，避免动态榜单 offset 翻页重复/漏数
+- 热榜聚合 key 使用 Redis 短缓存，减少每次请求重建聚合榜单
+- 视频详情优先从 Redis 读取，前端预加载改成先拉视频 ID 再批量取详情
 - 播放行为事件支持 `exposure/play_start/play_progress/play_finish/pause/skip`
+- 行为事件优先入 Redis 队列，失败时再同步落库
 
 ## Run
 

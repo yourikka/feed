@@ -101,7 +101,7 @@ func TrackVideoEvent(input TrackVideoEventInput) (TrackVideoEventResult, error) 
 		recordRecentExposure(viewerKey, input.VideoID, time.Now())
 	}
 
-	if err := config.DB.Create(&model.VideoBehaviorEvent{
+	event := queuedVideoEvent{
 		UserID:     derefUint(input.UserID),
 		ViewerKey:  viewerKey,
 		VideoID:    input.VideoID,
@@ -111,12 +111,33 @@ func TrackVideoEvent(input TrackVideoEventInput) (TrackVideoEventResult, error) 
 		ProgressMs: sanitizePositiveInt64(input.ProgressMs),
 		DurationMs: sanitizePositiveInt64(input.DurationMs),
 		PositionMs: sanitizePositiveInt64(input.PositionMs),
-	}).Error; err != nil {
-		return TrackVideoEventResult{}, err
 	}
 
-	ranking.RecordHotEvent(input.VideoID, scoreDeltaForEvent(eventType, input.ProgressMs, input.DurationMs, input.PositionMs))
+	if !enqueueVideoEvent(event) {
+		if err := persistVideoEvent(event); err != nil {
+			return TrackVideoEventResult{}, err
+		}
+	}
 	return TrackVideoEventResult{Accepted: true}, nil
+}
+
+func persistAcceptedVideoEvent(input TrackVideoEventInput, viewerKey string) error {
+	eventType := strings.TrimSpace(strings.ToLower(input.EventType))
+	if err := config.DB.Create(&model.VideoBehaviorEvent{
+		UserID:     derefUint(input.UserID),
+		ViewerKey:  viewerKey,
+		VideoID:    input.VideoID,
+		EventType:  eventType,
+		RequestID:  strings.TrimSpace(input.RequestID),
+		SessionID:  strings.TrimSpace(input.SessionID),
+		ProgressMs: sanitizePositiveInt64(input.ProgressMs),
+		DurationMs: sanitizePositiveInt64(input.DurationMs),
+		PositionMs: sanitizePositiveInt64(input.PositionMs),
+	}).Error; err != nil {
+		return err
+	}
+	ranking.RecordHotEvent(input.VideoID, scoreDeltaForEvent(eventType, input.ProgressMs, input.DurationMs, input.PositionMs))
+	return nil
 }
 
 func FilterRecentlyExposedVideoIDs(viewerKey string, videoIDs []uint) ([]uint, error) {

@@ -58,10 +58,9 @@ func GetHotVideoIDsByAggKey(aggKey string, offset, limit int) ([]uint, int64, er
 	if aggKey == "" {
 		aggKey = buildAggKey()
 	}
-	if err := config.RDB.ZUnionStore(config.Ctx, aggKey, &redis.ZStore{Keys: keys}).Err(); err != nil {
+	if err := EnsureHotAggKey(aggKey); err != nil {
 		return nil, 0, err
 	}
-	_ = config.RDB.Expire(config.Ctx, aggKey, hotAggTTL).Err()
 
 	total, err := config.RDB.ZCard(config.Ctx, aggKey).Result()
 	if err != nil {

@@ -11,9 +11,12 @@ import (
 )
 
 var (
-	jwtSecretOnce sync.Once
-	jwtSecret     []byte
-	jwtSecretErr  error
+	jwtSecretOnce      sync.Once
+	jwtSecret          []byte
+	jwtSecretErr       error
+	snapshotSecretOnce sync.Once
+	snapshotSecret     []byte
+	snapshotSecretErr  error
 )
 
 // Claims 自定义Token结构
@@ -76,4 +79,19 @@ func getJWTSecret() ([]byte, error) {
 		jwtSecret = []byte(secret)
 	})
 	return jwtSecret, jwtSecretErr
+}
+
+func GetSnapshotSecret() ([]byte, error) {
+	snapshotSecretOnce.Do(func() {
+		secret := strings.TrimSpace(os.Getenv("SNAPSHOT_SECRET"))
+		if len(secret) < 32 {
+			secret = strings.TrimSpace(os.Getenv("JWT_SECRET"))
+		}
+		if len(secret) < 32 {
+			snapshotSecretErr = errors.New("SNAPSHOT_SECRET or JWT_SECRET must be set and at least 32 characters")
+			return
+		}
+		snapshotSecret = []byte(secret)
+	})
+	return snapshotSecret, snapshotSecretErr
 }

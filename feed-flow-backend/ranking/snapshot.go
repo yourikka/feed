@@ -6,9 +6,13 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/yourikka/feed-flow/util"
 )
 
 const hotSnapshotTTL = 2 * time.Minute
+
+const hotSnapshotSeparator = "."
 
 type HotSnapshotCursor struct {
 	AggKey  string `json:"agg_key"`
@@ -31,7 +35,13 @@ func EncodeHotSnapshotCursor(cursor HotSnapshotCursor) string {
 	if err != nil {
 		return ""
 	}
-	return base64.RawURLEncoding.EncodeToString(payload)
+	secret, err := util.GetSnapshotSecret()
+	if err != nil {
+		return ""
+	}
+	encodedPayload := base64.RawURLEncoding.EncodeToString(payload)
+	signature := util.SignPayload(secret, payload)
+	return encodedPayload + hotSnapshotSeparator + signature
 }
 
 func ParseHotSnapshotCursor(raw string) (HotSnapshotCursor, bool) {
@@ -39,8 +49,19 @@ func ParseHotSnapshotCursor(raw string) (HotSnapshotCursor, bool) {
 	if raw == "" {
 		return HotSnapshotCursor{}, false
 	}
-	decoded, err := base64.RawURLEncoding.DecodeString(raw)
+	parts := strings.Split(raw, hotSnapshotSeparator)
+	if len(parts) != 2 {
+		return HotSnapshotCursor{}, false
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(parts[0])
 	if err != nil {
+		return HotSnapshotCursor{}, false
+	}
+	secret, err := util.GetSnapshotSecret()
+	if err != nil {
+		return HotSnapshotCursor{}, false
+	}
+	if err := util.VerifyPayloadSignature(secret, decoded, parts[1]); err != nil {
 		return HotSnapshotCursor{}, false
 	}
 	var cursor HotSnapshotCursor

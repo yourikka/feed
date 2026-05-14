@@ -109,29 +109,7 @@ func PublishVideo(title, playUrl, coverUrl string, authorId uint) error {
 }
 
 func getVideosByIDsOrdered(videoIDs []uint) ([]model.Video, error) {
-	if len(videoIDs) == 0 {
-		return []model.Video{}, nil
-	}
-
-	var videos []model.Video
-	if err := config.DB.Preload("Author").Where("id IN ?", videoIDs).Find(&videos).Error; err != nil {
-		return nil, err
-	}
-
-	videoMap := make(map[uint]model.Video, len(videos))
-	for _, video := range videos {
-		videoMap[video.ID] = video
-	}
-
-	ordered := make([]model.Video, 0, len(videoIDs))
-	for _, id := range videoIDs {
-		video, ok := videoMap[id]
-		if !ok {
-			continue
-		}
-		ordered = append(ordered, video)
-	}
-	return ordered, nil
+	return getVideosByIDsOrderedWithCache(videoIDs)
 }
 
 // DeleteVideo 删除作者自己的视频及其关联数据
@@ -296,10 +274,29 @@ func decodeFeedCursor(raw string) (FeedCursor, bool) {
 }
 
 func getLatestVideoFeed(userID *uint, viewerKey string, cursor uint, limit int, filterSeen bool) ([]FeedVideo, string, bool, error) {
+	videoIDs, nextToken, hasMore, err := getLatestVideoIDsPage(viewerKey, cursor, 0, limit, filterSeen)
+	if err != nil {
+		return nil, "", false, err
+	}
+	videos, err := getVideosByIDsOrderedWithCache(videoIDs)
+	if err != nil {
+		return nil, "", false, err
+	}
+	feedVideos, err := buildFeedVideos(videos, userID)
+	if err != nil {
+		return nil, "", false, err
+	}
+	return feedVideos, nextToken, hasMore, nil
+}
+
+func getLatestVideoIDsPage(viewerKey string, legacyCursor uint, tokenCursor uint, limit int, filterSeen bool) ([]uint, string, bool, error) {
 	limit = normalizeFeedLimit(limit)
 
 	fetchLimit := limit + 6
-	lastID := cursor
+	lastID := legacyCursor
+	if tokenCursor > 0 {
+		lastID = tokenCursor
+	}
 	filteredVideos := make([]model.Video, 0, limit+1)
 	hasMore := false
 
@@ -342,11 +339,6 @@ func getLatestVideoFeed(userID *uint, viewerKey string, cursor uint, limit int, 
 		hasMore = true
 	}
 
-	feedVideos, err := buildFeedVideos(filteredVideos, userID)
-	if err != nil {
-		return nil, "", false, err
-	}
-
 	nextCursor := ""
 	if hasMore && len(filteredVideos) > 0 {
 		nextCursor = encodeFeedCursor(FeedCursor{
@@ -355,10 +347,26 @@ func getLatestVideoFeed(userID *uint, viewerKey string, cursor uint, limit int, 
 		})
 	}
 
-	return feedVideos, nextCursor, hasMore, nil
+	return modelVideosToIDs(filteredVideos), nextCursor, hasMore, nil
 }
 
 func getHotVideoFeed(userID *uint, viewerKey string, cursorToken string, legacyCursor uint, limit int, filterSeen bool) ([]FeedVideo, string, bool, error) {
+	videoIDs, nextCursor, hasMore, err := getHotVideoIDsPage(viewerKey, cursorToken, legacyCursor, limit, filterSeen)
+	if err != nil {
+		return nil, "", false, err
+	}
+	videos, err := getVideosByIDsOrderedWithCache(videoIDs)
+	if err != nil {
+		return nil, "", false, err
+	}
+	feedVideos, err := buildFeedVideos(videos, userID)
+	if err != nil {
+		return nil, "", false, err
+	}
+	return feedVideos, nextCursor, hasMore, nil
+}
+
+func getHotVideoIDsPage(viewerKey string, cursorToken string, legacyCursor uint, limit int, filterSeen bool) ([]uint, string, bool, error) {
 	limit = normalizeFeedLimit(limit)
 
 	offset := int(legacyCursor)
@@ -424,7 +432,7 @@ func getHotVideoFeed(userID *uint, viewerKey string, cursorToken string, legacyC
 			Created: snapshot.Created,
 		})
 	}
-	return feedVideos, nextCursor, hasMore, nil
+	return videoIDs, nextCursor, hasMore, nil
 }
 
 // GetVideoFeed 获取视频流数据和交互状态

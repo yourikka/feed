@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"errors"
 	"strconv"
 	"strings"
 
@@ -52,4 +53,21 @@ func parseOptionalPositiveIntQuery(c *gin.Context, key string, defaultVal int) (
 		return 0, false
 	}
 	return parsed, true
+}
+
+func parseUintCSV(raw string) ([]uint, error) {
+	parts := strings.Split(strings.TrimSpace(raw), ",")
+	result := make([]uint, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		parsed, err := strconv.ParseUint(part, 10, 64)
+		if err != nil || parsed == 0 {
+			return nil, errors.New("invalid uint csv")
+		}
+		result = append(result, uint(parsed))
+	}
+	return result, nil
 }

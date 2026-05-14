@@ -9,6 +9,28 @@ export const getFeedList = (params = {}) => {
 }
 
 /**
+ * 获取仅包含视频 ID 的 feed 列表
+ * @param {Object} params feed 查询参数
+ * @returns 后端返回的 ID 列表
+ */
+export const getFeedIDs = (params = {}) => {
+  return request.get('/feed/ids/', { params })
+}
+
+/**
+ * 按视频 ID 批量获取详情
+ * @param {Array<number|string>} videoIds 视频 ID 数组
+ * @returns 后端返回的视频详情列表
+ */
+export const getFeedDetails = (videoIds = []) => {
+  return request.get('/feed/details/', {
+    params: {
+      video_ids: videoIds.join(',')
+    }
+  })
+}
+
+/**
  * 上报 feed 播放行为事件
  * @param {Object} data 行为事件数据
  * @returns 后端返回的处理结果
