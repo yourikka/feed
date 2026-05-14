@@ -3,14 +3,16 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
+	"github.com/rabbitmq/amqp091-go"
 	"github.com/yourikka/feed-flow/config"
+	"github.com/yourikka/feed-flow/mq"
 )
 
 const (
-	behaviorEventQueueKey   = "feed:behavior:queue"
-	behaviorWorkerBlockTime = 3 * time.Second
+	behaviorEventMaxRetry = 3
 )
 
 type queuedVideoEvent struct {
@@ -26,20 +28,28 @@ type queuedVideoEvent struct {
 }
 
 func enqueueVideoEvent(event queuedVideoEvent) bool {
-	if config.RDB == nil {
-		return false
-	}
 	payload, err := json.Marshal(event)
 	if err != nil {
 		return false
 	}
-	return config.RDB.RPush(config.Ctx, behaviorEventQueueKey, payload).Err() == nil
+	headers := amqp091.Table{
+		"x-event-type": event.EventType,
+	}
+	err = mq.PublishMessage(
+		"",
+		config.BehaviorEventQueue,
+		amqp091.Publishing{
+			ContentType:  "application/json",
+			Body:         payload,
+			Headers:      headers,
+			DeliveryMode: amqp091.Persistent,
+			Timestamp:    time.Now(),
+		},
+	)
+	return err == nil
 }
 
 func StartBehaviorEventWorker(ctx context.Context) {
-	if config.RDB == nil {
-		return
-	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -47,23 +57,42 @@ func StartBehaviorEventWorker(ctx context.Context) {
 		default:
 		}
 
-		rows, err := config.RDB.BLPop(ctx, behaviorWorkerBlockTime, behaviorEventQueueKey).Result()
-		if err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			time.Sleep(500 * time.Millisecond)
-			continue
-		}
-		if len(rows) != 2 {
+		consumeCh := config.GetRabbitConsumeChannel()
+		if consumeCh == nil {
+			time.Sleep(time.Second)
 			continue
 		}
 
-		var event queuedVideoEvent
-		if err := json.Unmarshal([]byte(rows[1]), &event); err != nil {
+		consumerTag := fmt.Sprintf("behavior_event_consumer_%d", time.Now().UnixNano())
+		msgs, err := consumeCh.Consume(
+			config.BehaviorEventQueue,
+			consumerTag,
+			false,
+			false,
+			false,
+			false,
+			nil,
+		)
+		if err != nil {
+			time.Sleep(time.Second)
 			continue
 		}
-		_ = persistVideoEvent(event)
+
+		for {
+			select {
+			case <-ctx.Done():
+				_ = consumeCh.Cancel(consumerTag, false)
+				return
+			case msg, ok := <-msgs:
+				if !ok {
+					goto RECONNECT
+				}
+				handleBehaviorMessage(msg)
+			}
+		}
+
+	RECONNECT:
+		time.Sleep(time.Second)
 	}
 }
 
@@ -78,6 +107,86 @@ func persistVideoEvent(event queuedVideoEvent) error {
 		DurationMs: event.DurationMs,
 		PositionMs: event.PositionMs,
 	}, event.ViewerKey)
+}
+
+func handleBehaviorMessage(msg amqp091.Delivery) {
+	retryCount := mq.GetRetryCount(msg.Headers)
+
+	var event queuedVideoEvent
+	if err := json.Unmarshal(msg.Body, &event); err != nil {
+		handleBehaviorFinalFailure(msg, retryCount, err)
+		return
+	}
+
+	if err := persistVideoEvent(event); err != nil {
+		handleBehaviorConsumeFailure(msg, retryCount, err)
+		return
+	}
+	if err := msg.Ack(false); err != nil {
+		return
+	}
+}
+
+func handleBehaviorConsumeFailure(msg amqp091.Delivery, retryCount int, cause error) {
+	if retryCount >= behaviorEventMaxRetry {
+		handleBehaviorFinalFailure(msg, retryCount, cause)
+		return
+	}
+	if err := publishBehaviorRetryMessage(msg, retryCount+1, cause); err != nil {
+		_ = msg.Nack(false, true)
+		return
+	}
+	_ = msg.Ack(false)
+}
+
+func handleBehaviorFinalFailure(msg amqp091.Delivery, retryCount int, cause error) {
+	if err := publishBehaviorDLQMessage(msg, retryCount, cause); err != nil {
+		_ = msg.Nack(false, true)
+		return
+	}
+	_ = msg.Ack(false)
+}
+
+func publishBehaviorRetryMessage(msg amqp091.Delivery, retryCount int, cause error) error {
+	headers := mq.CloneHeaders(msg.Headers)
+	headers["x-retry-count"] = retryCount
+	headers["x-last-error"] = cause.Error()
+	return mq.PublishMessage(
+		"",
+		config.BehaviorEventRetryQueue,
+		amqp091.Publishing{
+			ContentType:     msg.ContentType,
+			Body:            msg.Body,
+			Headers:         headers,
+			DeliveryMode:    amqp091.Persistent,
+			CorrelationId:   msg.CorrelationId,
+			ContentEncoding: msg.ContentEncoding,
+			MessageId:       msg.MessageId,
+			Type:            msg.Type,
+			Timestamp:       time.Now(),
+		},
+	)
+}
+
+func publishBehaviorDLQMessage(msg amqp091.Delivery, retryCount int, cause error) error {
+	headers := mq.CloneHeaders(msg.Headers)
+	headers["x-retry-count"] = retryCount
+	headers["x-final-error"] = cause.Error()
+	return mq.PublishMessage(
+		config.BehaviorEventDLX,
+		config.BehaviorEventDLQRoutingKey,
+		amqp091.Publishing{
+			ContentType:     msg.ContentType,
+			Body:            msg.Body,
+			Headers:         headers,
+			DeliveryMode:    amqp091.Persistent,
+			CorrelationId:   msg.CorrelationId,
+			ContentEncoding: msg.ContentEncoding,
+			MessageId:       msg.MessageId,
+			Type:            msg.Type,
+			Timestamp:       time.Now(),
+		},
+	)
 }
 
 func uintPtr(v uint) *uint {

@@ -22,6 +22,9 @@
 - `GET /douyin/feed/` 支持 `client_id`、`filter_seen=1`，可做曝光去重与已曝光过滤
 - 前端预加载改成“先拉 ID，再按 ID 从 Redis/接口回填详情”，避免直接预取完整视频列表
 - `POST /douyin/feed/event/` 用于上报 `exposure/play_start/play_progress/play_finish/pause/skip`
+- 播放行为事件现在走 RabbitMQ 异步消费，不再使用 Redis 简单队列
+- 热榜聚合支持后台预热刷新，减少请求时实时聚合开销
+- 用户态视频卡片支持 viewer 维度短缓存，缓存点赞/收藏/关注状态
 
 ## Start
 

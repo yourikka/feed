@@ -49,9 +49,9 @@ func TestGetRetryCount(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := getRetryCount(tt.headers)
+			got := GetRetryCount(tt.headers)
 			if got != tt.want {
-				t.Fatalf("getRetryCount()=%d, want=%d", got, tt.want)
+				t.Fatalf("GetRetryCount()=%d, want=%d", got, tt.want)
 			}
 		})
 	}

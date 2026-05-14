@@ -12,7 +12,9 @@ import (
 
 	"github.com/yourikka/feed-flow/config"
 	"github.com/yourikka/feed-flow/mq"
+	"github.com/yourikka/feed-flow/ranking"
 	"github.com/yourikka/feed-flow/router"
+	"github.com/yourikka/feed-flow/service"
 )
 
 func main() {
@@ -50,6 +52,11 @@ func main() {
 	go func() {
 		defer wg.Done()
 		service.StartBehaviorEventWorker(ctx)
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		ranking.StartHotAggRefreshWorker(ctx)
 	}()
 
 	//初始化路由

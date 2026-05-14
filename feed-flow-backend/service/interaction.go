@@ -41,6 +41,7 @@ func LikeVideo(videoId, userId uint) (bool, error) {
 			return false, delErr
 		}
 		adjustVideoStatsCache(videoId, videoStatsLikeField, -1)
+		invalidateFeedVideoCacheForVideo(videoId)
 		ranking.RecordHotEvent(videoId, -ranking.ScoreLike)
 		return false, nil
 	}
@@ -59,6 +60,7 @@ func LikeVideo(videoId, userId uint) (bool, error) {
 	}
 	if err == nil {
 		adjustVideoStatsCache(videoId, videoStatsLikeField, 1)
+		invalidateFeedVideoCacheForVideo(videoId)
 		ranking.RecordHotEvent(videoId, ranking.ScoreLike)
 	}
 	return true, err
@@ -73,6 +75,7 @@ func FavoriteVideo(videoId, userId uint) (bool, error) {
 			return false, delErr
 		}
 		adjustVideoStatsCache(videoId, videoStatsFavoriteField, -1)
+		invalidateFeedVideoCacheForVideo(videoId)
 		ranking.RecordHotEvent(videoId, -ranking.ScoreFavorite)
 		return false, nil
 	}
@@ -91,6 +94,7 @@ func FavoriteVideo(videoId, userId uint) (bool, error) {
 	}
 	if err == nil {
 		adjustVideoStatsCache(videoId, videoStatsFavoriteField, 1)
+		invalidateFeedVideoCacheForVideo(videoId)
 		ranking.RecordHotEvent(videoId, ranking.ScoreFavorite)
 	}
 	return true, err
@@ -108,6 +112,7 @@ func FollowUser(userId, targetUserId uint) (bool, error) {
 		if delErr := config.DB.Unscoped().Where("user_id = ? AND target_user_id = ?", userId, targetUserId).Delete(&model.Follow{}).Error; delErr != nil {
 			return false, delErr
 		}
+		invalidateFeedVideoCacheByAuthor(targetUserId)
 		return false, nil
 	}
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -121,6 +126,9 @@ func FollowUser(userId, targetUserId uint) (bool, error) {
 	err = config.DB.Create(&model.Follow{UserID: userId, TargetUserID: targetUserId}).Error
 	if isDuplicateEntry(err) {
 		return true, nil
+	}
+	if err == nil {
+		invalidateFeedVideoCacheByAuthor(targetUserId)
 	}
 	return true, err
 }
@@ -137,6 +145,7 @@ func CommentVideo(videoId, userId uint, content string) error {
 	}).Error
 	if err == nil {
 		adjustVideoStatsCache(videoId, videoStatsCommentField, 1)
+		invalidateFeedVideoCacheForVideo(videoId)
 		ranking.RecordHotEvent(videoId, ranking.ScoreComment)
 	}
 	return err
@@ -200,6 +209,7 @@ func DeleteComment(commentID, operatorID uint) error {
 		return err
 	}
 	adjustVideoStatsCache(comment.VideoID, videoStatsCommentField, -1)
+	invalidateFeedVideoCacheForVideo(comment.VideoID)
 	ranking.RecordHotEvent(comment.VideoID, -ranking.ScoreComment)
 	return nil
 }

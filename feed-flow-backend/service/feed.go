@@ -164,6 +164,52 @@ func buildFeedVideos(videos []model.Video, userID *uint) ([]FeedVideo, error) {
 	if len(videos) == 0 {
 		return []FeedVideo{}, nil
 	}
+	viewerKey := BuildViewerKey(userID, "")
+	if viewerKey != "" {
+		cachedItems := make(map[uint]FeedVideo, len(videos))
+		missVideos := make([]model.Video, 0, len(videos))
+		for _, video := range videos {
+			if item, ok := getFeedVideoFromCache(viewerKey, video.ID); ok {
+				cachedItems[video.ID] = item
+				continue
+			}
+			missVideos = append(missVideos, video)
+		}
+		if len(missVideos) == 0 {
+			result := make([]FeedVideo, 0, len(videos))
+			for _, video := range videos {
+				if item, ok := cachedItems[video.ID]; ok {
+					result = append(result, item)
+				}
+			}
+			return result, nil
+		}
+
+		freshItems, err := buildFeedVideosWithoutCache(missVideos, userID)
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range freshItems {
+			cachedItems[item.ID] = item
+			setFeedVideoCache(viewerKey, item)
+		}
+
+		result := make([]FeedVideo, 0, len(videos))
+		for _, video := range videos {
+			if item, ok := cachedItems[video.ID]; ok {
+				result = append(result, item)
+			}
+		}
+		return result, nil
+	}
+
+	return buildFeedVideosWithoutCache(videos, userID)
+}
+
+func buildFeedVideosWithoutCache(videos []model.Video, userID *uint) ([]FeedVideo, error) {
+	if len(videos) == 0 {
+		return []FeedVideo{}, nil
+	}
 
 	videoIDs := make([]uint, 0, len(videos))
 	authorIDs := make([]uint, 0, len(videos))
@@ -392,7 +438,7 @@ func getHotVideoIDsPage(viewerKey string, cursorToken string, legacyCursor uint,
 		return nil, "", false, err
 	}
 	if len(videoIDs) == 0 {
-		return []FeedVideo{}, "", false, nil
+		return []uint{}, "", false, nil
 	}
 
 	if filterSeen {
@@ -405,7 +451,7 @@ func getHotVideoIDsPage(viewerKey string, cursorToken string, legacyCursor uint,
 		videoIDs = videoIDs[:limit]
 	}
 	if len(videoIDs) == 0 {
-		return []FeedVideo{}, "", false, nil
+		return []uint{}, "", false, nil
 	}
 
 	videos, err := getVideosByIDsOrdered(videoIDs)
@@ -413,15 +459,10 @@ func getHotVideoIDsPage(viewerKey string, cursorToken string, legacyCursor uint,
 		return nil, "", false, err
 	}
 	if len(videos) == 0 {
-		return []FeedVideo{}, "", false, nil
+		return []uint{}, "", false, nil
 	}
 
-	feedVideos, err := buildFeedVideos(videos, userID)
-	if err != nil {
-		return nil, "", false, err
-	}
-
-	next := offset + len(feedVideos)
+	next := offset + len(videoIDs)
 	hasMore := int64(next) < total
 	nextCursor := ""
 	if hasMore {

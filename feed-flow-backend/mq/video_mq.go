@@ -20,7 +20,7 @@ const (
 
 // PublishVideo 发送消息：视频发布成功后异步通知
 func PublishVideo(videoID uint) {
-	err := publishMessage(
+	err := PublishMessage(
 		"",
 		config.VideoPublishQueue,
 		amqp091.Publishing{
@@ -107,7 +107,7 @@ func ConsumerVideoMQWithContext(ctx context.Context) {
 }
 
 func handleVideoMessage(msg amqp091.Delivery) {
-	retryCount := getRetryCount(msg.Headers)
+	retryCount := GetRetryCount(msg.Headers)
 
 	videoID, err := strconv.Atoi(string(msg.Body))
 	if err != nil {
@@ -171,11 +171,11 @@ func handleFinalFailure(msg amqp091.Delivery, retryCount int, cause error) {
 }
 
 func publishToRetryQueue(msg amqp091.Delivery, retryCount int, cause error) error {
-	headers := cloneHeaders(msg.Headers)
+	headers := CloneHeaders(msg.Headers)
 	headers["x-retry-count"] = retryCount
 	headers["x-last-error"] = cause.Error()
 
-	return publishMessage(
+	return PublishMessage(
 		"",
 		config.VideoPublishRetryQueue,
 		amqp091.Publishing{
@@ -193,11 +193,11 @@ func publishToRetryQueue(msg amqp091.Delivery, retryCount int, cause error) erro
 }
 
 func publishToDLQ(msg amqp091.Delivery, retryCount int, cause error) error {
-	headers := cloneHeaders(msg.Headers)
+	headers := CloneHeaders(msg.Headers)
 	headers["x-retry-count"] = retryCount
 	headers["x-final-error"] = cause.Error()
 
-	return publishMessage(
+	return PublishMessage(
 		config.VideoPublishDLX,
 		config.VideoPublishDLQRoutingKey,
 		amqp091.Publishing{
@@ -214,7 +214,7 @@ func publishToDLQ(msg amqp091.Delivery, retryCount int, cause error) error {
 	)
 }
 
-func publishMessage(exchange, routingKey string, publishing amqp091.Publishing) error {
+func PublishMessage(exchange, routingKey string, publishing amqp091.Publishing) error {
 	conn := config.GetRabbitConn()
 	if conn == nil || conn.IsClosed() {
 		return errors.New("rabbitmq unavailable")
@@ -259,7 +259,7 @@ func publishMessage(exchange, routingKey string, publishing amqp091.Publishing) 
 	}
 }
 
-func cloneHeaders(headers amqp091.Table) amqp091.Table {
+func CloneHeaders(headers amqp091.Table) amqp091.Table {
 	if headers == nil {
 		return amqp091.Table{}
 	}
@@ -270,7 +270,7 @@ func cloneHeaders(headers amqp091.Table) amqp091.Table {
 	return cloned
 }
 
-func getRetryCount(headers amqp091.Table) int {
+func GetRetryCount(headers amqp091.Table) int {
 	if headers == nil {
 		return 0
 	}

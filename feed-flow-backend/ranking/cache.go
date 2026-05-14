@@ -1,6 +1,7 @@
 package ranking
 
 import (
+	"context"
 	"time"
 
 	"github.com/go-redis/redis/v8"
@@ -8,6 +9,7 @@ import (
 )
 
 const hotAggReadTTL = 20 * time.Second
+const hotAggRefreshInterval = 15 * time.Second
 
 func EnsureHotAggKey(aggKey string) error {
 	if config.RDB == nil {
@@ -29,4 +31,26 @@ func EnsureHotAggKey(aggKey string) error {
 		return err
 	}
 	return config.RDB.Expire(config.Ctx, aggKey, hotAggReadTTL).Err()
+}
+
+func RefreshHotAggKeyNow() error {
+	return EnsureHotAggKey(buildAggKey())
+}
+
+func StartHotAggRefreshWorker(ctx context.Context) {
+	if config.RDB == nil {
+		return
+	}
+	_ = RefreshHotAggKeyNow()
+	ticker := time.NewTicker(hotAggRefreshInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			_ = RefreshHotAggKeyNow()
+		}
+	}
 }

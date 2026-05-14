@@ -15,10 +15,11 @@
 - 热榜使用 Redis 滑动窗口聚合（按小时桶）
 - Feed 支持基于 `client_id/user_id` 的曝光去重和最近曝光过滤
 - 热榜分页支持带签名的快照 token，避免动态榜单 offset 翻页重复/漏数
-- 热榜聚合 key 使用 Redis 短缓存，减少每次请求重建聚合榜单
+- 热榜聚合 key 使用 Redis 短缓存，并由后台 worker 周期预热
 - 视频详情优先从 Redis 读取，前端预加载改成先拉视频 ID 再批量取详情
 - 播放行为事件支持 `exposure/play_start/play_progress/play_finish/pause/skip`
-- 行为事件优先入 Redis 队列，失败时再同步落库
+- 行为事件优先走 RabbitMQ 异步消费，失败时再同步落库
+- Feed 卡片新增 viewer 维度缓存，缓存用户交互状态后的完整对象
 
 ## Run
 

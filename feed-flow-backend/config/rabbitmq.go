@@ -18,12 +18,17 @@ var (
 )
 
 const (
-	VideoPublishQueue         = "video_publish_queue"
-	VideoPublishRetryQueue    = "video_publish_retry_queue"
-	VideoPublishDLX           = "video_publish_dlx"
-	VideoPublishDLQ           = "video_publish_dlq"
-	VideoPublishDLQRoutingKey = "video.publish.failed"
-	rabbitReconnectInterval   = 5 * time.Second
+	VideoPublishQueue          = "video_publish_queue"
+	VideoPublishRetryQueue     = "video_publish_retry_queue"
+	VideoPublishDLX            = "video_publish_dlx"
+	VideoPublishDLQ            = "video_publish_dlq"
+	VideoPublishDLQRoutingKey  = "video.publish.failed"
+	BehaviorEventQueue         = "behavior_event_queue"
+	BehaviorEventRetryQueue    = "behavior_event_retry_queue"
+	BehaviorEventDLX           = "behavior_event_dlx"
+	BehaviorEventDLQ           = "behavior_event_dlq"
+	BehaviorEventDLQRoutingKey = "behavior.event.failed"
+	rabbitReconnectInterval    = 5 * time.Second
 )
 
 func InitRabbitMQ() {
@@ -57,7 +62,10 @@ func connectAndSetupRabbit() error {
 
 	forceRedeclare := getEnvAsBool("RABBITMQ_FORCE_REDECLARE", false)
 	if forceRedeclare {
-		for _, queueName := range []string{VideoPublishQueue, VideoPublishRetryQueue, VideoPublishDLQ} {
+		for _, queueName := range []string{
+			VideoPublishQueue, VideoPublishRetryQueue, VideoPublishDLQ,
+			BehaviorEventQueue, BehaviorEventRetryQueue, BehaviorEventDLQ,
+		} {
 			if delErr := deleteQueueIfExists(conn, queueName); delErr != nil {
 				_ = conn.Close()
 				return delErr
@@ -152,6 +160,69 @@ func setupTopology(ch *amqp091.Channel) error {
 			"x-message-ttl":             int32(retryTTL),
 			"x-dead-letter-exchange":    "",
 			"x-dead-letter-routing-key": VideoPublishQueue,
+		},
+	); err != nil {
+		return err
+	}
+
+	if err := ch.ExchangeDeclare(
+		BehaviorEventDLX,
+		"direct",
+		true,
+		false,
+		false,
+		false,
+		nil,
+	); err != nil {
+		return err
+	}
+
+	if _, err := ch.QueueDeclare(
+		BehaviorEventDLQ,
+		true,
+		false,
+		false,
+		false,
+		nil,
+	); err != nil {
+		return err
+	}
+
+	if err := ch.QueueBind(
+		BehaviorEventDLQ,
+		BehaviorEventDLQRoutingKey,
+		BehaviorEventDLX,
+		false,
+		nil,
+	); err != nil {
+		return err
+	}
+
+	if _, err := ch.QueueDeclare(
+		BehaviorEventQueue,
+		true,
+		false,
+		false,
+		false,
+		amqp091.Table{
+			"x-dead-letter-exchange":    BehaviorEventDLX,
+			"x-dead-letter-routing-key": BehaviorEventDLQRoutingKey,
+		},
+	); err != nil {
+		return err
+	}
+
+	retryTTL = getEnvAsInt("RABBITMQ_RETRY_TTL_MS", 5000)
+	if _, err := ch.QueueDeclare(
+		BehaviorEventRetryQueue,
+		true,
+		false,
+		false,
+		false,
+		amqp091.Table{
+			"x-message-ttl":             int32(retryTTL),
+			"x-dead-letter-exchange":    "",
+			"x-dead-letter-routing-key": BehaviorEventQueue,
 		},
 	); err != nil {
 		return err
