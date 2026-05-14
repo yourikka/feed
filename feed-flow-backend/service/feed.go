@@ -230,11 +230,17 @@ func buildFeedVideos(videos []model.Video, userID *uint) ([]FeedVideo, error) {
 	}
 	viewerKey := BuildViewerKey(userID, "")
 	if viewerKey != "" {
-		cachedItems := make(map[uint]FeedVideo, len(videos))
-		missVideos := make([]model.Video, 0, len(videos))
+		videoIDs := make([]uint, 0, len(videos))
+		videoByID := make(map[uint]model.Video, len(videos))
 		for _, video := range videos {
-			if item, ok := getFeedVideoFromCache(viewerKey, video.ID); ok {
-				cachedItems[video.ID] = item
+			videoIDs = append(videoIDs, video.ID)
+			videoByID[video.ID] = video
+		}
+		cachedItems, missIDs := getFeedVideosFromCache(viewerKey, videoIDs)
+		missVideos := make([]model.Video, 0, len(missIDs))
+		for _, videoID := range missIDs {
+			video, ok := videoByID[videoID]
+			if !ok {
 				continue
 			}
 			missVideos = append(missVideos, video)
@@ -296,24 +302,15 @@ func buildFeedVideosWithoutCache(videos []model.Video, userID *uint) ([]FeedVide
 	followingMap := map[uint]bool{}
 
 	if userID != nil {
-		var likedRows []videoIDRow
-		if err := config.DB.Model(&model.Like{}).
-			Select("video_id").
-			Where("user_id = ? AND video_id IN ?", *userID, videoIDs).
-			Scan(&likedRows).Error; err != nil {
+		var err error
+		likedMap, err = getInteractionStatesBatch(interactionKindLike, *userID, videoIDs)
+		if err != nil {
 			return nil, err
 		}
-
-		var favoritedRows []videoIDRow
-		if err := config.DB.Model(&model.Favorite{}).
-			Select("video_id").
-			Where("user_id = ? AND video_id IN ?", *userID, videoIDs).
-			Scan(&favoritedRows).Error; err != nil {
+		favoritedMap, err = getInteractionStatesBatch(interactionKindFavorite, *userID, videoIDs)
+		if err != nil {
 			return nil, err
 		}
-
-		likedMap = idRowsToMap(likedRows)
-		favoritedMap = idRowsToMap(favoritedRows)
 
 		if len(authorIDs) > 0 {
 			var followRows []followIDRow
@@ -407,17 +404,17 @@ func getLatestVideoIDsPage(viewerKey string, legacyCursor uint, tokenCursor uint
 	if tokenCursor > 0 {
 		lastID = tokenCursor
 	}
-	filteredVideos := make([]model.Video, 0, limit+1)
+	filteredIDs := make([]uint, 0, limit+1)
 	hasMore := false
 
-	for attempt := 0; attempt < 3 && len(filteredVideos) < limit+1; attempt++ {
-		query := config.DB.Preload("Author").Order("id desc")
+	for attempt := 0; attempt < 3 && len(filteredIDs) < limit+1; attempt++ {
+		query := config.DB.Model(&model.Video{}).Select("id as video_id").Order("id desc")
 		if lastID > 0 {
 			query = query.Where("id < ?", lastID)
 		}
 
-		var batch []model.Video
-		err := query.Limit(fetchLimit).Find(&batch).Error
+		var batch []videoIDRow
+		err := query.Limit(fetchLimit).Scan(&batch).Error
 		if err != nil {
 			return nil, "", false, err
 		}
@@ -425,39 +422,44 @@ func getLatestVideoIDsPage(viewerKey string, legacyCursor uint, tokenCursor uint
 			break
 		}
 
-		candidates := batch
+		candidates := make([]uint, 0, len(batch))
+		for _, row := range batch {
+			if row.VideoID > 0 {
+				candidates = append(candidates, row.VideoID)
+			}
+		}
 		if filterSeen {
-			var filterErr error
-			candidates, filterErr = FilterRecentlyExposedVideos(viewerKey, batch)
+			filteredBatch, filterErr := FilterRecentlyExposedVideoIDs(viewerKey, candidates)
 			if filterErr != nil {
 				return nil, "", false, filterErr
 			}
+			candidates = filteredBatch
 		}
-		filteredVideos = append(filteredVideos, candidates...)
-		lastID = batch[len(batch)-1].ID
+		filteredIDs = append(filteredIDs, candidates...)
+		lastID = batch[len(batch)-1].VideoID
 		if len(batch) < fetchLimit {
 			break
 		}
 	}
 
-	if len(filteredVideos) > limit {
+	if len(filteredIDs) > limit {
 		hasMore = true
-		filteredVideos = filteredVideos[:limit]
+		filteredIDs = filteredIDs[:limit]
 	}
 
-	if !hasMore && len(filteredVideos) == limit && lastID > 0 {
+	if !hasMore && len(filteredIDs) == limit && lastID > 0 {
 		hasMore = true
 	}
 
 	nextCursor := ""
-	if hasMore && len(filteredVideos) > 0 {
+	if hasMore && len(filteredIDs) > 0 {
 		nextCursor = encodeFeedCursor(FeedCursor{
 			Mode:   "latest",
-			LastID: filteredVideos[len(filteredVideos)-1].ID,
+			LastID: filteredIDs[len(filteredIDs)-1],
 		})
 	}
 
-	return modelVideosToIDs(filteredVideos), nextCursor, hasMore, nil
+	return filteredIDs, nextCursor, hasMore, nil
 }
 
 func getHotVideoFeed(userID *uint, viewerKey string, cursorToken string, legacyCursor uint, limit int, filterSeen bool) ([]FeedVideo, string, bool, error) {

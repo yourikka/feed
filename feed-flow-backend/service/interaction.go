@@ -3,6 +3,7 @@ package service
 import (
 	"errors"
 	"strings"
+	"time"
 
 	mysqlDriver "github.com/go-sql-driver/mysql"
 	"github.com/yourikka/feed-flow/config"
@@ -34,70 +35,12 @@ func isDuplicateEntry(err error) bool {
 
 // 点赞/取消点赞
 func LikeVideo(videoId, userId uint) (bool, error) {
-	var like model.Like
-	err := config.DB.Where("video_id = ? AND user_id = ?", videoId, userId).First(&like).Error
-	if err == nil {
-		if delErr := config.DB.Unscoped().Where("video_id = ? AND user_id = ?", videoId, userId).Delete(&model.Like{}).Error; delErr != nil {
-			return false, delErr
-		}
-		adjustVideoStatsCache(videoId, videoStatsLikeField, -1)
-		invalidateFeedVideoCacheForVideo(videoId)
-		ranking.RecordHotEvent(videoId, -ranking.ScoreLike)
-		return false, nil
-	}
-	if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return false, err
-	}
-
-	if delErr := config.DB.Unscoped().Where("video_id = ? AND user_id = ?", videoId, userId).Delete(&model.Like{}).Error; delErr != nil {
-		return false, delErr
-	}
-
-	err = config.DB.Create(&model.Like{VideoID: videoId, UserID: userId}).Error
-	if isDuplicateEntry(err) {
-		invalidateVideoStatsCache(videoId)
-		return true, nil
-	}
-	if err == nil {
-		adjustVideoStatsCache(videoId, videoStatsLikeField, 1)
-		invalidateFeedVideoCacheForVideo(videoId)
-		ranking.RecordHotEvent(videoId, ranking.ScoreLike)
-	}
-	return true, err
+	return toggleVideoInteraction(interactionKindLike, videoId, userId)
 }
 
 // 收藏/取消收藏
 func FavoriteVideo(videoId, userId uint) (bool, error) {
-	var favorite model.Favorite
-	err := config.DB.Where("video_id = ? AND user_id = ?", videoId, userId).First(&favorite).Error
-	if err == nil {
-		if delErr := config.DB.Unscoped().Where("video_id = ? AND user_id = ?", videoId, userId).Delete(&model.Favorite{}).Error; delErr != nil {
-			return false, delErr
-		}
-		adjustVideoStatsCache(videoId, videoStatsFavoriteField, -1)
-		invalidateFeedVideoCacheForVideo(videoId)
-		ranking.RecordHotEvent(videoId, -ranking.ScoreFavorite)
-		return false, nil
-	}
-	if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return false, err
-	}
-
-	if delErr := config.DB.Unscoped().Where("video_id = ? AND user_id = ?", videoId, userId).Delete(&model.Favorite{}).Error; delErr != nil {
-		return false, delErr
-	}
-
-	err = config.DB.Create(&model.Favorite{VideoID: videoId, UserID: userId}).Error
-	if isDuplicateEntry(err) {
-		invalidateVideoStatsCache(videoId)
-		return true, nil
-	}
-	if err == nil {
-		adjustVideoStatsCache(videoId, videoStatsFavoriteField, 1)
-		invalidateFeedVideoCacheForVideo(videoId)
-		ranking.RecordHotEvent(videoId, ranking.ScoreFavorite)
-	}
-	return true, err
+	return toggleVideoInteraction(interactionKindFavorite, videoId, userId)
 }
 
 // 关注/取消关注
@@ -106,31 +49,24 @@ func FollowUser(userId, targetUserId uint) (bool, error) {
 		return false, errors.New("不能关注自己")
 	}
 
-	var follow model.Follow
-	err := config.DB.Where("user_id = ? AND target_user_id = ?", userId, targetUserId).First(&follow).Error
-	if err == nil {
-		if delErr := config.DB.Unscoped().Where("user_id = ? AND target_user_id = ?", userId, targetUserId).Delete(&model.Follow{}).Error; delErr != nil {
-			return false, delErr
-		}
+	res := config.DB.Unscoped().Where("user_id = ? AND target_user_id = ?", userId, targetUserId).Delete(&model.Follow{})
+	if res.Error != nil {
+		return false, res.Error
+	}
+	if res.RowsAffected > 0 {
 		invalidateFeedVideoCacheByAuthor(targetUserId)
 		return false, nil
 	}
-	if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return false, err
-	}
 
-	if delErr := config.DB.Unscoped().Where("user_id = ? AND target_user_id = ?", userId, targetUserId).Delete(&model.Follow{}).Error; delErr != nil {
-		return false, delErr
-	}
-
-	err = config.DB.Create(&model.Follow{UserID: userId, TargetUserID: targetUserId}).Error
+	err := config.DB.Create(&model.Follow{UserID: userId, TargetUserID: targetUserId}).Error
 	if isDuplicateEntry(err) {
 		return true, nil
 	}
-	if err == nil {
-		invalidateFeedVideoCacheByAuthor(targetUserId)
+	if err != nil {
+		return false, err
 	}
-	return true, err
+	invalidateFeedVideoCacheByAuthor(targetUserId)
+	return true, nil
 }
 
 // 评论视频
@@ -212,4 +148,51 @@ func DeleteComment(commentID, operatorID uint) error {
 	invalidateFeedVideoCacheForVideo(comment.VideoID)
 	ranking.RecordHotEvent(comment.VideoID, -ranking.ScoreComment)
 	return nil
+}
+
+func toggleVideoInteraction(kind interactionKind, videoID, userID uint) (bool, error) {
+	currentState, currentVersion, err := getInteractionState(kind, userID, videoID)
+	if err != nil {
+		return false, err
+	}
+
+	nextState := !currentState
+	nextVersion := currentVersion + time.Now().UnixNano()
+	setInteractionStateCache(kind, userID, videoID, nextState, nextVersion)
+
+	switch kind {
+	case interactionKindLike:
+		applyInteractionSideEffects(videoID, nextState, videoStatsLikeField, ranking.ScoreLike)
+	case interactionKindFavorite:
+		applyInteractionSideEffects(videoID, nextState, videoStatsFavoriteField, ranking.ScoreFavorite)
+	default:
+		return false, errors.New("不支持的交互类型")
+	}
+
+	cmd := interactionCommand{
+		Kind:         kind,
+		UserID:       userID,
+		VideoID:      videoID,
+		DesiredState: nextState,
+		Version:      nextVersion,
+	}
+	if err := publishInteractionCommand(cmd); err != nil {
+		if syncErr := applyInteractionCommand(cmd); syncErr != nil {
+			return false, syncErr
+		}
+	}
+
+	return nextState, nil
+}
+
+func applyInteractionSideEffects(videoID uint, active bool, statsField string, scoreDelta float64) {
+	delta := int64(-1)
+	score := -scoreDelta
+	if active {
+		delta = 1
+		score = scoreDelta
+	}
+	adjustVideoStatsCache(videoID, statsField, delta)
+	invalidateFeedVideoCacheForVideo(videoID)
+	ranking.RecordHotEvent(videoID, score)
 }

@@ -110,12 +110,50 @@ func getVideosByIDsOrderedWithCache(videoIDs []uint) ([]model.Video, error) {
 
 	videoMap := make(map[uint]model.Video, len(videoIDs))
 	missIDs := make([]uint, 0, len(videoIDs))
-	for _, videoID := range videoIDs {
-		if video, ok := getVideoDetailFromCache(videoID); ok {
-			videoMap[videoID] = video
-			continue
+	if config.RDB != nil {
+		keys := make([]string, 0, len(videoIDs))
+		keyToID := make(map[string]uint, len(videoIDs))
+		for _, videoID := range videoIDs {
+			if videoID == 0 {
+				continue
+			}
+			key := getVideoDetailCacheKey(videoID)
+			keys = append(keys, key)
+			keyToID[key] = videoID
 		}
-		missIDs = append(missIDs, videoID)
+		values, err := config.RDB.MGet(config.Ctx, keys...).Result()
+		if err == nil && len(values) == len(keys) {
+			for i, value := range values {
+				videoID := keyToID[keys[i]]
+				if value == nil {
+					missIDs = append(missIDs, videoID)
+					continue
+				}
+				raw, ok := value.(string)
+				if !ok || raw == "" {
+					missIDs = append(missIDs, videoID)
+					continue
+				}
+				var detail cachedVideoDetail
+				if err := json.Unmarshal([]byte(raw), &detail); err != nil {
+					missIDs = append(missIDs, videoID)
+					continue
+				}
+				videoMap[videoID] = toModelVideo(detail)
+			}
+		} else {
+			for _, videoID := range videoIDs {
+				if videoID > 0 {
+					missIDs = append(missIDs, videoID)
+				}
+			}
+		}
+	} else {
+		for _, videoID := range videoIDs {
+			if videoID > 0 {
+				missIDs = append(missIDs, videoID)
+			}
+		}
 	}
 
 	if len(missIDs) > 0 {

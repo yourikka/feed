@@ -55,7 +55,26 @@ func GetFeedVideoIDs(query FeedQuery) (FeedIDPage, error) {
 	}
 }
 
-func GetFeedVideosByIDs(videoIDs []uint, userID *uint) ([]FeedVideo, error) {
+func GetFeedVideosByIDs(videoIDs []uint, userID *uint, clientID string) ([]FeedVideo, error) {
+	viewerKey := BuildViewerKey(userID, clientID)
+	if viewerKey != "" && len(videoIDs) > 0 {
+		cachedItems, missIDs := getFeedVideosFromCache(viewerKey, videoIDs)
+		if len(missIDs) == 0 {
+			return arrangeFeedVideosByIDs(videoIDs, cachedItems), nil
+		}
+		videos, err := getVideosByIDsOrderedWithCache(missIDs)
+		if err != nil {
+			return nil, err
+		}
+		freshItems, err := buildFeedVideos(videos, userID)
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range freshItems {
+			cachedItems[item.ID] = item
+		}
+		return arrangeFeedVideosByIDs(videoIDs, cachedItems), nil
+	}
 	videos, err := getVideosByIDsOrderedWithCache(videoIDs)
 	if err != nil {
 		return nil, err
@@ -78,6 +97,18 @@ func modelVideosToIDs(videos []model.Video) []uint {
 	result := make([]uint, 0, len(videos))
 	for _, video := range videos {
 		result = append(result, video.ID)
+	}
+	return result
+}
+
+func arrangeFeedVideosByIDs(videoIDs []uint, items map[uint]FeedVideo) []FeedVideo {
+	result := make([]FeedVideo, 0, len(videoIDs))
+	for _, videoID := range videoIDs {
+		item, ok := items[videoID]
+		if !ok {
+			continue
+		}
+		result = append(result, item)
 	}
 	return result
 }

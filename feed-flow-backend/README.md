@@ -8,6 +8,11 @@
 - `FEED_FOLLOW_PUSH_MAX_FANS` (optional, default `2000`，关注流推拉阈值)
 - `DB_AUTO_MIGRATE` (optional, `true` 时自动创建 `video_behavior_events` 等表)
 - `SNAPSHOT_SECRET` (optional, 不配时回退到 `JWT_SECRET`，用于热榜快照 token 签名)
+- `DB_MAX_OPEN_CONNS` / `DB_MAX_IDLE_CONNS` / `DB_CONN_MAX_LIFETIME_SECONDS` / `DB_CONN_MAX_IDLE_SECONDS`
+- `DB_SKIP_DEFAULT_TX` (optional, default `true`)
+- `DB_PREPARE_STMT` (optional, default `true`)
+- `DB_LOG_INFO` (optional, default `false`，压测排障时可开启)
+- `DB_SLOW_THRESHOLD_MS` (optional, default `200`，慢 SQL 观测阈值)
 
 ## Runtime Notes
 
@@ -22,6 +27,9 @@
 - 行为事件优先走 RabbitMQ 异步消费，失败时再同步落库
 - Feed 卡片新增 viewer 维度缓存，缓存用户交互状态后的完整对象
 - 关注流支持推拉结合：普通作者写扩散到 `follow_feed_inboxes`，大V走拉模式
+- `feed/details` 支持 `client_id`，匿名用户也可命中 viewer 维度缓存
+- Feed 卡片缓存失效使用“索引集合 + UNLINK”，避免 Redis `KEYS` 阻塞
+- MQ 发布通道复用，减少高并发下频繁创建 channel 的开销
 
 ## Run
 

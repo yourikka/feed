@@ -23,9 +23,11 @@ export const getFeedIDs = (params = {}) => {
  * @returns 后端返回的视频详情列表
  */
 export const getFeedDetails = (videoIds = []) => {
+  const clientId = localStorage.getItem('feed_client_id') || ''
   return request.get('/feed/details/', {
     params: {
-      video_ids: videoIds.join(',')
+      video_ids: videoIds.join(','),
+      client_id: clientId
     }
   })
 }

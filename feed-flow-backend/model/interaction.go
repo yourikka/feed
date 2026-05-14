@@ -16,15 +16,15 @@ type Comment struct {
 // 点赞表
 type Like struct {
 	gorm.Model
-	VideoID uint `gorm:"uniqueIndex:uk_likes_video_user;index"` //视频ID
-	UserID  uint `gorm:"uniqueIndex:uk_likes_video_user;index"` //用户ID
+	VideoID uint `gorm:"uniqueIndex:uk_likes_video_user;index;index:idx_likes_user_video,priority:2"` //视频ID
+	UserID  uint `gorm:"uniqueIndex:uk_likes_video_user;index;index:idx_likes_user_video,priority:1"` //用户ID
 }
 
 // 收藏表
 type Favorite struct {
 	gorm.Model
-	VideoID uint `gorm:"uniqueIndex:uk_favorites_video_user;index"` //视频ID
-	UserID  uint `gorm:"uniqueIndex:uk_favorites_video_user;index"` //用户ID
+	VideoID uint `gorm:"uniqueIndex:uk_favorites_video_user;index;index:idx_favorites_user_video,priority:2"` //视频ID
+	UserID  uint `gorm:"uniqueIndex:uk_favorites_video_user;index;index:idx_favorites_user_video,priority:1"` //用户ID
 }
 
 // 关注表

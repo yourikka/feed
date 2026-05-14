@@ -87,6 +87,10 @@ func FeedDetails(c *gin.Context) {
 		respondError(c, "video_ids 参数错误", gin.H{"video_list": []any{}})
 		return
 	}
+	clientID := strings.TrimSpace(c.GetHeader("X-Client-Id"))
+	if clientID == "" {
+		clientID = strings.TrimSpace(c.Query("client_id"))
+	}
 
 	videoIDs, err := parseUintCSV(rawIDs)
 	if err != nil || len(videoIDs) == 0 {
@@ -94,7 +98,7 @@ func FeedDetails(c *gin.Context) {
 		return
 	}
 
-	videoList, err := service.GetFeedVideosByIDs(videoIDs, userID)
+	videoList, err := service.GetFeedVideosByIDs(videoIDs, userID, clientID)
 	if err != nil {
 		respondError(c, "获取视频详情失败", gin.H{"video_list": []any{}})
 		return

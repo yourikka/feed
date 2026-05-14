@@ -47,3 +47,38 @@ func TestModelVideosToIDs(t *testing.T) {
 		}
 	}
 }
+
+func TestArrangeFeedVideosByIDs(t *testing.T) {
+	input := map[uint]FeedVideo{
+		11: {ID: 11, Title: "a"},
+		3:  {ID: 3, Title: "b"},
+		7:  {ID: 7, Title: "c"},
+	}
+	got := arrangeFeedVideosByIDs([]uint{7, 100, 11, 3}, input)
+	want := []uint{7, 11, 3}
+	if len(got) != len(want) {
+		t.Fatalf("arrange length got %d want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i].ID != want[i] {
+			t.Fatalf("arrange[%d] id got %d want %d", i, got[i].ID, want[i])
+		}
+	}
+}
+
+func TestArrangeFeedVideosByIDsKeepOrderAndSkipMissing(t *testing.T) {
+	items := map[uint]FeedVideo{
+		2: {ID: 2},
+		4: {ID: 4},
+	}
+	ordered := arrangeFeedVideosByIDs([]uint{4, 5, 2, 4}, items)
+	want := []uint{4, 2, 4}
+	if len(ordered) != len(want) {
+		t.Fatalf("arrange length got %d want %d", len(ordered), len(want))
+	}
+	for i := range want {
+		if ordered[i].ID != want[i] {
+			t.Fatalf("arrange[%d] got %d want %d", i, ordered[i].ID, want[i])
+		}
+	}
+}

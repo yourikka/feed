@@ -26,6 +26,9 @@
 - 热榜聚合支持后台预热刷新，减少请求时实时聚合开销
 - 用户态视频卡片支持 viewer 维度短缓存，缓存点赞/收藏/关注状态
 - 关注流支持推拉结合：普通作者写扩散到 inbox，大V使用拉模式实时聚合
+- `feed/details` 透传 `client_id`，提升匿名流量下 viewer 缓存命中率
+- 缓存失效采用 Redis 索引集合与 `UNLINK`，避免 `KEYS` 全扫描
+- RabbitMQ 发布链路复用 publisher channel，降低高并发 publish 成本
 
 ## Start
 
@@ -74,6 +77,9 @@ k6 run -e TEST_MODE=extreme -e BASE_URL=http://localhost:8080 scripts/k6/feed.js
 
 # online-like mixed traffic mode (auth + latest/hot/comment/like, includes steady 3k RPS stage):
 k6 run -e BASE_URL=http://localhost:8080 scripts/k6/feed_online_mix.js
+
+# read-only baseline mode (latest/hot only, no write path):
+k6 run -e BASE_URL=http://localhost:8080 scripts/k6/feed_read_only.js
 
 # optional: reuse existing token + tune setup token pool size
 k6 run -e BASE_URL=http://localhost:8080 -e TOKEN="<your_token>" scripts/k6/feed_online_mix.js

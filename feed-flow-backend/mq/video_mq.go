@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/rabbitmq/amqp091-go"
@@ -17,6 +18,13 @@ const (
 	videoPublishMaxRetry = 3
 	publishTimeout       = 5 * time.Second
 )
+
+var publisherState = struct {
+	mu        sync.Mutex
+	conn      *amqp091.Connection
+	ch        *amqp091.Channel
+	confirmCh <-chan amqp091.Confirmation
+}{}
 
 // PublishVideo 发送消息：视频发布成功后异步通知
 func PublishVideo(videoID uint) {
@@ -220,16 +228,14 @@ func PublishMessage(exchange, routingKey string, publishing amqp091.Publishing) 
 		return errors.New("rabbitmq unavailable")
 	}
 
-	ch, err := conn.Channel()
-	if err != nil {
-		return err
-	}
-	defer ch.Close()
+	publisherState.mu.Lock()
+	defer publisherState.mu.Unlock()
 
-	if err := ch.Confirm(false); err != nil {
+	if err := ensurePublisherReady(conn); err != nil {
 		return err
 	}
-	confirmChan := ch.NotifyPublish(make(chan amqp091.Confirmation, 1))
+	ch := publisherState.ch
+	confirmChan := publisherState.confirmCh
 
 	ctx, cancel := context.WithTimeout(context.Background(), publishTimeout)
 	defer cancel()
@@ -242,12 +248,14 @@ func PublishMessage(exchange, routingKey string, publishing amqp091.Publishing) 
 		false,
 		publishing,
 	); err != nil {
+		closePublisherChannel()
 		return err
 	}
 
 	select {
 	case confirm, ok := <-confirmChan:
 		if !ok {
+			closePublisherChannel()
 			return errors.New("publisher confirm channel closed")
 		}
 		if !confirm.Ack {
@@ -257,6 +265,36 @@ func PublishMessage(exchange, routingKey string, publishing amqp091.Publishing) 
 	case <-ctx.Done():
 		return fmt.Errorf("publisher confirm timeout: %w", ctx.Err())
 	}
+}
+
+func ensurePublisherReady(conn *amqp091.Connection) error {
+	if publisherState.ch != nil && publisherState.conn == conn {
+		return nil
+	}
+
+	closePublisherChannel()
+	ch, err := conn.Channel()
+	if err != nil {
+		return err
+	}
+	if err := ch.Confirm(false); err != nil {
+		_ = ch.Close()
+		return err
+	}
+
+	publisherState.conn = conn
+	publisherState.ch = ch
+	publisherState.confirmCh = ch.NotifyPublish(make(chan amqp091.Confirmation, 256))
+	return nil
+}
+
+func closePublisherChannel() {
+	if publisherState.ch != nil {
+		_ = publisherState.ch.Close()
+	}
+	publisherState.conn = nil
+	publisherState.ch = nil
+	publisherState.confirmCh = nil
 }
 
 func CloneHeaders(headers amqp091.Table) amqp091.Table {

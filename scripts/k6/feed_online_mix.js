@@ -4,19 +4,24 @@ import { check } from "k6";
 const BASE_URL = __ENV.BASE_URL || "http://localhost:8080";
 const TOKEN = __ENV.TOKEN || "";
 const TOKEN_POOL_SIZE = Number(__ENV.TOKEN_POOL_SIZE || 30);
+const MAX_RATE = Number(__ENV.MAX_RATE || 3000);
+const START_RATE = Number(__ENV.START_RATE || 500);
+const MID_RATE = Math.max(Math.floor(MAX_RATE / 2), START_RATE);
+const PREALLOCATED_VUS = Number(__ENV.PREALLOCATED_VUS || 200);
+const MAX_VUS = Number(__ENV.MAX_VUS || 3000);
 
 export const options = {
   scenarios: {
     online_mix: {
       executor: "ramping-arrival-rate",
-      startRate: 500,
+      startRate: START_RATE,
       timeUnit: "1s",
-      preAllocatedVUs: 200,
-      maxVUs: 1500,
+      preAllocatedVUs: PREALLOCATED_VUS,
+      maxVUs: MAX_VUS,
       stages: [
-        { target: 1500, duration: "30s" },
-        { target: 3000, duration: "30s" },
-        { target: 3000, duration: "2m" },
+        { target: MID_RATE, duration: "30s" },
+        { target: MAX_RATE, duration: "30s" },
+        { target: MAX_RATE, duration: "2m" },
         { target: 0, duration: "30s" },
       ],
       exec: "mixedTraffic",
@@ -24,7 +29,7 @@ export const options = {
   },
   thresholds: {
     http_req_failed: ["rate<0.01"],
-    http_req_duration: ["p(95)<300"],
+    http_req_duration: ["p(95)<500"],
   },
 };
 

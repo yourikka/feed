@@ -73,12 +73,6 @@ func TrackVideoEvent(input TrackVideoEventInput) (TrackVideoEventResult, error) 
 		return TrackVideoEventResult{}, errors.New("缺少用户身份或 client_id")
 	}
 
-	if ok, err := ensureVideoExists(input.VideoID); err != nil {
-		return TrackVideoEventResult{}, err
-	} else if !ok {
-		return TrackVideoEventResult{}, errors.New("视频不存在")
-	}
-
 	requestID := strings.TrimSpace(input.RequestID)
 	if requestID != "" {
 		deduped, err := reserveBehaviorRequest(requestID)
@@ -114,7 +108,16 @@ func TrackVideoEvent(input TrackVideoEventInput) (TrackVideoEventResult, error) 
 	}
 
 	if !enqueueVideoEvent(event) {
-		if err := persistVideoEvent(event); err != nil {
+		if err := persistAcceptedVideoEvent(TrackVideoEventInput{
+			UserID:     uintPtr(event.UserID),
+			VideoID:    event.VideoID,
+			EventType:  event.EventType,
+			RequestID:  event.RequestID,
+			SessionID:  event.SessionID,
+			ProgressMs: event.ProgressMs,
+			DurationMs: event.DurationMs,
+			PositionMs: event.PositionMs,
+		}, event.ViewerKey); err != nil {
 			return TrackVideoEventResult{}, err
 		}
 	}
@@ -199,14 +202,6 @@ func isSupportedVideoEvent(eventType string) bool {
 	default:
 		return false
 	}
-}
-
-func ensureVideoExists(videoID uint) (bool, error) {
-	var count int64
-	if err := config.DB.Model(&model.Video{}).Where("id = ?", videoID).Count(&count).Error; err != nil {
-		return false, err
-	}
-	return count > 0, nil
 }
 
 func reserveBehaviorRequest(requestID string) (bool, error) {

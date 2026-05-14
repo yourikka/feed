@@ -56,6 +56,11 @@ func main() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		service.StartInteractionWorker(ctx)
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
 		ranking.StartHotAggRefreshWorker(ctx)
 	}()
 

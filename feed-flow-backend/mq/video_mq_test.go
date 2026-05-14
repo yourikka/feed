@@ -56,3 +56,20 @@ func TestGetRetryCount(t *testing.T) {
 		})
 	}
 }
+
+func TestClosePublisherChannelResetsState(t *testing.T) {
+	publisherState.mu.Lock()
+	publisherState.conn = nil
+	publisherState.ch = nil
+	publisherState.confirmCh = make(chan amqp091.Confirmation, 1)
+	publisherState.mu.Unlock()
+
+	publisherState.mu.Lock()
+	closePublisherChannel()
+	isNil := publisherState.conn == nil && publisherState.ch == nil && publisherState.confirmCh == nil
+	publisherState.mu.Unlock()
+
+	if !isNil {
+		t.Fatalf("publisher state should be reset to nil")
+	}
+}

@@ -46,7 +46,6 @@ services:
   backend:
     build:
       context: ./feed-flow-backend
-    container_name: feed-backend
     restart: unless-stopped
     init: true
     environment:
@@ -61,8 +60,8 @@ services:
       RABBITMQ_RETRY_TTL_MS: "5000"
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
       FEED_HOT_WINDOW_HOURS: ${FEED_HOT_WINDOW_HOURS:-24}
-    ports:
-      - "8080:8080"
+    expose:
+      - "8080"
     volumes:
       - backend-uploads:/app/uploads
     healthcheck:
@@ -76,6 +75,19 @@ services:
       redis:
         condition: service_healthy
       rabbitmq:
+        condition: service_healthy
+
+  gateway:
+    image: nginx:1.27-alpine
+    container_name: feed-gateway
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    volumes:
+      - ./deploy/nginx/api-gateway.conf:/etc/nginx/nginx.conf:ro
+      - backend-uploads:/app/uploads:ro
+    depends_on:
+      backend:
         condition: service_healthy
 
   frontend:
@@ -92,8 +104,8 @@ services:
       timeout: 5s
       retries: 10
     depends_on:
-      backend:
-        condition: service_healthy
+      gateway:
+        condition: service_started
 
 volumes:
   mysql-data:
