@@ -16,20 +16,20 @@ type Comment struct {
 // 点赞表
 type Like struct {
 	gorm.Model
-	VideoID uint `gorm:"uniqueIndex:uk_likes_video_user;index;index:idx_likes_user_video,priority:2"` //视频ID
-	UserID  uint `gorm:"uniqueIndex:uk_likes_video_user;index;index:idx_likes_user_video,priority:1"` //用户ID
+	VideoID uint `gorm:"uniqueIndex:uk_likes_video_user;index:idx_likes_user_video,priority:2"` //视频ID
+	UserID  uint `gorm:"uniqueIndex:uk_likes_video_user;index:idx_likes_user_video,priority:1"` //用户ID
 }
 
 // 收藏表
 type Favorite struct {
 	gorm.Model
-	VideoID uint `gorm:"uniqueIndex:uk_favorites_video_user;index;index:idx_favorites_user_video,priority:2"` //视频ID
-	UserID  uint `gorm:"uniqueIndex:uk_favorites_video_user;index;index:idx_favorites_user_video,priority:1"` //用户ID
+	VideoID uint `gorm:"uniqueIndex:uk_favorites_video_user;index:idx_favorites_user_video,priority:2"` //视频ID
+	UserID  uint `gorm:"uniqueIndex:uk_favorites_video_user;index:idx_favorites_user_video,priority:1"` //用户ID
 }
 
 // 关注表
 type Follow struct {
 	gorm.Model
-	UserID       uint `gorm:"uniqueIndex:uk_follows_user_target;index"` // 发起关注的用户
-	TargetUserID uint `gorm:"uniqueIndex:uk_follows_user_target;index"` // 被关注的用户
+	UserID       uint `gorm:"uniqueIndex:uk_follows_user_target"` // 发起关注的用户
+	TargetUserID uint `gorm:"uniqueIndex:uk_follows_user_target"` // 被关注的用户
 }

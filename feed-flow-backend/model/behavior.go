@@ -7,7 +7,7 @@ type VideoBehaviorEvent struct {
 	gorm.Model
 	UserID     uint   `gorm:"index"`
 	ViewerKey  string `gorm:"size:96;index"`
-	VideoID    uint   `gorm:"index;index:idx_behavior_video_created,priority:1"`
+	VideoID    uint   `gorm:"index:idx_behavior_video_created,priority:1"`
 	EventType  string `gorm:"size:32;index"`
 	RequestID  string `gorm:"size:64;index"`
 	SessionID  string `gorm:"size:64;index"`
