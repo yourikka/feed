@@ -5,6 +5,7 @@
 - `MYSQL_DSN`
 - `JWT_SECRET` (at least 32 chars)
 - `FEED_HOT_WINDOW_HOURS` (optional, default `24`)
+- `FEED_FOLLOW_PUSH_MAX_FANS` (optional, default `2000`，关注流推拉阈值)
 - `DB_AUTO_MIGRATE` (optional, `true` 时自动创建 `video_behavior_events` 等表)
 - `SNAPSHOT_SECRET` (optional, 不配时回退到 `JWT_SECRET`，用于热榜快照 token 签名)
 
@@ -20,6 +21,7 @@
 - 播放行为事件支持 `exposure/play_start/play_progress/play_finish/pause/skip`
 - 行为事件优先走 RabbitMQ 异步消费，失败时再同步落库
 - Feed 卡片新增 viewer 维度缓存，缓存用户交互状态后的完整对象
+- 关注流支持推拉结合：普通作者写扩散到 `follow_feed_inboxes`，大V走拉模式
 
 ## Run
 

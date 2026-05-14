@@ -122,7 +122,8 @@ const router = useRouter()
 const defaultAvatar = 'https://via.placeholder.com/150'
 const sortOptions = [
   { label: '最新', value: 'latest' },
-  { label: '热门', value: 'hot' }
+  { label: '热门', value: 'hot' },
+  { label: '关注', value: 'follow' }
 ]
 
 const currentUserId = computed(() => Number(localStorage.getItem('userId') || 0))
@@ -150,7 +151,11 @@ let observer = null
 let sessionId = ''
 let clientId = ''
 
-const sortLabel = computed(() => (sortType.value === 'hot' ? '热度混排' : '时间流'))
+const sortLabel = computed(() => {
+  if (sortType.value === 'hot') return '热度混排'
+  if (sortType.value === 'follow') return '关注流'
+  return '时间流'
+})
 
 const ensureClientId = () => {
   const storageKey = 'feed_client_id'

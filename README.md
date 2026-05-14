@@ -13,8 +13,8 @@
 
 ## Feed API Notes
 
-- `GET /douyin/feed/?sort=latest|hot&cursor=<n>&limit=<n>`
-- `GET /douyin/feed/ids/?sort=latest|hot&cursor_token=<token>&limit=<n>` 先获取视频 ID 列表
+- `GET /douyin/feed/?sort=latest|hot|follow&cursor=<n>&limit=<n>`
+- `GET /douyin/feed/ids/?sort=latest|hot|follow&cursor_token=<token>&limit=<n>` 先获取视频 ID 列表
 - `GET /douyin/feed/details/?video_ids=1,2,3` 按 ID 批量取视频详情
 - `sort=latest` 使用时间倒序游标分页
 - `sort=hot` 使用滑动窗口热榜（Redis ZSet，`cursor` 为偏移量）
@@ -25,6 +25,7 @@
 - 播放行为事件现在走 RabbitMQ 异步消费，不再使用 Redis 简单队列
 - 热榜聚合支持后台预热刷新，减少请求时实时聚合开销
 - 用户态视频卡片支持 viewer 维度短缓存，缓存点赞/收藏/关注状态
+- 关注流支持推拉结合：普通作者写扩散到 inbox，大V使用拉模式实时聚合
 
 ## Start
 

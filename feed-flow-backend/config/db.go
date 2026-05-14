@@ -32,6 +32,7 @@ func InitDB() {
 			&model.Like{},
 			&model.Favorite{},
 			&model.Follow{},
+			&model.FollowFeedInbox{},
 			&model.VideoBehaviorEvent{},
 		)
 		if err != nil {

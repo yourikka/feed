@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"os"
+	"strconv"
 	"strings"
 
 	"github.com/yourikka/feed-flow/config"
@@ -12,6 +14,7 @@ import (
 	"github.com/yourikka/feed-flow/ranking"
 	"github.com/yourikka/feed-flow/util"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type FeedAuthor struct {
@@ -35,9 +38,11 @@ type FeedVideo struct {
 }
 
 type FeedCursor struct {
-	Mode     string `json:"mode"`
-	LastID   uint   `json:"last_id,omitempty"`
-	HotToken string `json:"hot_token,omitempty"`
+	Mode         string `json:"mode"`
+	LastID       uint   `json:"last_id,omitempty"`
+	HotToken     string `json:"hot_token,omitempty"`
+	FollowInbox  uint   `json:"follow_inbox,omitempty"`
+	FollowOutbox uint   `json:"follow_outbox,omitempty"`
 }
 
 type FeedQuery struct {
@@ -102,10 +107,69 @@ func PublishVideo(title, playUrl, coverUrl string, authorId uint) error {
 		return err
 	}
 	ranking.RecordHotEvent(video.ID, ranking.ScorePublish)
+	fanoutVideoToFollowers(video.ID, authorId)
 	// 发布视频到mq
 	mq.PublishVideo(video.ID)
 	return nil
 
+}
+
+func getFollowPushThreshold() int64 {
+	raw := strings.TrimSpace(os.Getenv("FEED_FOLLOW_PUSH_MAX_FANS"))
+	if raw == "" {
+		return 2000
+	}
+	parsed, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || parsed <= 0 {
+		return 2000
+	}
+	return parsed
+}
+
+func fanoutVideoToFollowers(videoID, authorID uint) {
+	var followerCount int64
+	if err := config.DB.Model(&model.Follow{}).
+		Where("target_user_id = ?", authorID).
+		Count(&followerCount).Error; err != nil {
+		return
+	}
+	if followerCount == 0 {
+		return
+	}
+	if followerCount > getFollowPushThreshold() {
+		// 大V走拉模式，不做写扩散。
+		return
+	}
+
+	var followers []followIDRow
+	if err := config.DB.Model(&model.Follow{}).
+		Select("user_id as target_user_id").
+		Where("target_user_id = ?", authorID).
+		Scan(&followers).Error; err != nil {
+		return
+	}
+	if len(followers) == 0 {
+		return
+	}
+
+	inboxes := make([]model.FollowFeedInbox, 0, len(followers))
+	for _, follower := range followers {
+		if follower.TargetUserID == 0 {
+			continue
+		}
+		inboxes = append(inboxes, model.FollowFeedInbox{
+			UserID:   follower.TargetUserID,
+			VideoID:  videoID,
+			AuthorID: authorID,
+		})
+	}
+	if len(inboxes) == 0 {
+		return
+	}
+	_ = config.DB.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "user_id"}, {Name: "video_id"}},
+		DoNothing: true,
+	}).Create(&inboxes).Error
 }
 
 func getVideosByIDsOrdered(videoIDs []uint) ([]model.Video, error) {
@@ -412,6 +476,205 @@ func getHotVideoFeed(userID *uint, viewerKey string, cursorToken string, legacyC
 	return feedVideos, nextCursor, hasMore, nil
 }
 
+func getFollowVideoFeed(userID *uint, viewerKey string, legacyCursor uint, tokenCursor FeedCursor, limit int, filterSeen bool) ([]FeedVideo, string, bool, error) {
+	videoIDs, nextCursor, hasMore, err := getFollowVideoIDsPage(userID, viewerKey, legacyCursor, tokenCursor, limit, filterSeen)
+	if err != nil {
+		return nil, "", false, err
+	}
+	videos, err := getVideosByIDsOrderedWithCache(videoIDs)
+	if err != nil {
+		return nil, "", false, err
+	}
+	feedVideos, err := buildFeedVideos(videos, userID)
+	if err != nil {
+		return nil, "", false, err
+	}
+	return feedVideos, nextCursor, hasMore, nil
+}
+
+func getFollowVideoIDsPage(userID *uint, viewerKey string, legacyCursor uint, tokenCursor FeedCursor, limit int, filterSeen bool) ([]uint, string, bool, error) {
+	if userID == nil {
+		return []uint{}, "", false, nil
+	}
+	limit = normalizeFeedLimit(limit)
+
+	inboxCursor := legacyCursor
+	if tokenCursor.FollowInbox > 0 {
+		inboxCursor = tokenCursor.FollowInbox
+	}
+	outboxCursor := tokenCursor.FollowOutbox
+
+	inboxIDs, nextInbox, inboxHasMore, err := getFollowInboxVideoIDs(*userID, inboxCursor, limit+6)
+	if err != nil {
+		return nil, "", false, err
+	}
+
+	need := limit
+	if len(inboxIDs) >= need {
+		videoIDs := inboxIDs[:need]
+		if filterSeen {
+			videoIDs, err = FilterRecentlyExposedVideoIDs(viewerKey, videoIDs)
+			if err != nil {
+				return nil, "", false, err
+			}
+		}
+		hasMore := inboxHasMore || len(inboxIDs) > need
+		nextToken := ""
+		if hasMore {
+			nextToken = encodeFeedCursor(FeedCursor{
+				Mode:         "follow",
+				FollowInbox:  nextInbox,
+				FollowOutbox: outboxCursor,
+			})
+		}
+		return videoIDs, nextToken, hasMore, nil
+	}
+
+	merged := make([]uint, 0, limit+8)
+	merged = append(merged, inboxIDs...)
+	need -= len(inboxIDs)
+	outboxIDs, nextOutbox, outboxHasMore, err := getFollowOutboxVideoIDs(*userID, outboxCursor, need+8)
+	if err != nil {
+		return nil, "", false, err
+	}
+	merged = append(merged, outboxIDs...)
+	merged = dedupeVideoIDs(merged)
+
+	if filterSeen {
+		merged, err = FilterRecentlyExposedVideoIDs(viewerKey, merged)
+		if err != nil {
+			return nil, "", false, err
+		}
+	}
+	if len(merged) > limit {
+		merged = merged[:limit]
+	}
+	if len(merged) == 0 {
+		return []uint{}, "", false, nil
+	}
+
+	hasMore := inboxHasMore || outboxHasMore || len(outboxIDs) > need
+	nextToken := ""
+	if hasMore {
+		nextToken = encodeFeedCursor(FeedCursor{
+			Mode:         "follow",
+			FollowInbox:  nextInbox,
+			FollowOutbox: nextOutbox,
+		})
+	}
+	return merged, nextToken, hasMore, nil
+}
+
+func dedupeVideoIDs(videoIDs []uint) []uint {
+	if len(videoIDs) <= 1 {
+		return videoIDs
+	}
+	seen := make(map[uint]struct{}, len(videoIDs))
+	result := make([]uint, 0, len(videoIDs))
+	for _, id := range videoIDs {
+		if id == 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		result = append(result, id)
+	}
+	return result
+}
+
+func getFollowInboxVideoIDs(userID uint, cursor uint, limit int) ([]uint, uint, bool, error) {
+	query := config.DB.Model(&model.FollowFeedInbox{}).
+		Select("video_id, id").
+		Where("user_id = ?", userID).
+		Order("id desc")
+	if cursor > 0 {
+		query = query.Where("id < ?", cursor)
+	}
+	type inboxRow struct {
+		ID      uint
+		VideoID uint
+	}
+	var rows []inboxRow
+	if err := query.Limit(limit + 1).Scan(&rows).Error; err != nil {
+		return nil, 0, false, err
+	}
+	hasMore := len(rows) > limit
+	if hasMore {
+		rows = rows[:limit]
+	}
+	videoIDs := make([]uint, 0, len(rows))
+	var nextCursor uint
+	for _, row := range rows {
+		videoIDs = append(videoIDs, row.VideoID)
+		nextCursor = row.ID
+	}
+	return videoIDs, nextCursor, hasMore, nil
+}
+
+func getFollowOutboxVideoIDs(userID uint, cursor uint, limit int) ([]uint, uint, bool, error) {
+	var followRows []followIDRow
+	if err := config.DB.Model(&model.Follow{}).
+		Select("target_user_id").
+		Where("user_id = ?", userID).
+		Scan(&followRows).Error; err != nil {
+		return nil, 0, false, err
+	}
+	if len(followRows) == 0 {
+		return []uint{}, 0, false, nil
+	}
+	authorIDs := make([]uint, 0, len(followRows))
+	for _, row := range followRows {
+		if row.TargetUserID > 0 {
+			authorIDs = append(authorIDs, row.TargetUserID)
+		}
+	}
+	if len(authorIDs) == 0 {
+		return []uint{}, 0, false, nil
+	}
+
+	threshold := getFollowPushThreshold()
+	if threshold > 0 {
+		var largeAuthorIDs []uint
+		if err := config.DB.Raw(`
+			SELECT f.target_user_id
+			FROM follows f
+			JOIN follows ff ON ff.target_user_id = f.target_user_id
+			WHERE f.user_id = ?
+			GROUP BY f.target_user_id
+			HAVING COUNT(ff.id) > ?
+		`, userID, threshold).Scan(&largeAuthorIDs).Error; err == nil && len(largeAuthorIDs) > 0 {
+			authorIDs = largeAuthorIDs
+		} else if err == nil && len(largeAuthorIDs) == 0 {
+			return []uint{}, 0, false, nil
+		}
+	}
+
+	query := config.DB.Model(&model.Video{}).
+		Select("id").
+		Where("author_id IN ?", authorIDs).
+		Order("id desc")
+	if cursor > 0 {
+		query = query.Where("id < ?", cursor)
+	}
+	var rows []videoIDRow
+	if err := query.Limit(limit + 1).Scan(&rows).Error; err != nil {
+		return nil, 0, false, err
+	}
+	hasMore := len(rows) > limit
+	if hasMore {
+		rows = rows[:limit]
+	}
+	videoIDs := make([]uint, 0, len(rows))
+	var nextCursor uint
+	for _, row := range rows {
+		videoIDs = append(videoIDs, row.VideoID)
+		nextCursor = row.VideoID
+	}
+	return videoIDs, nextCursor, hasMore, nil
+}
+
 func getHotVideoIDsPage(viewerKey string, cursorToken string, legacyCursor uint, limit int, filterSeen bool) ([]uint, string, bool, error) {
 	limit = normalizeFeedLimit(limit)
 
@@ -524,6 +787,8 @@ func GetVideoFeedByQuery(query FeedQuery) ([]FeedVideo, string, bool, error) {
 			return getLatestVideoFeed(query.UserID, viewerKey, query.LegacyID, limit, query.FilterSeen)
 		}
 		return videos, next, more, nil
+	case "follow":
+		return getFollowVideoFeed(query.UserID, viewerKey, query.LegacyID, cursor, limit, query.FilterSeen)
 	default:
 		return getLatestVideoFeed(query.UserID, viewerKey, query.LegacyID, limit, query.FilterSeen)
 	}

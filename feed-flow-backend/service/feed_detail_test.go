@@ -13,6 +13,7 @@ func TestNormalizeSortType(t *testing.T) {
 		want  string
 	}{
 		{name: "hot", input: "hot", want: "hot"},
+		{name: "follow", input: "follow", want: "follow"},
 		{name: "latest", input: "latest", want: "latest"},
 		{name: "fallback latest", input: "unknown", want: "latest"},
 	}

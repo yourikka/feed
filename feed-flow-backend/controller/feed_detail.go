@@ -29,6 +29,15 @@ func FeedIDs(c *gin.Context) {
 		return
 	}
 	sortType := strings.ToLower(strings.TrimSpace(c.DefaultQuery("sort", "latest")))
+	if sortType != "latest" && sortType != "hot" && sortType != "follow" {
+		respondError(c, "sort 参数错误，支持 latest/hot/follow", gin.H{
+			"video_ids":   []uint{},
+			"next_cursor": 0,
+			"next_token":  "",
+			"has_more":    false,
+		})
+		return
+	}
 	clientID := strings.TrimSpace(c.GetHeader("X-Client-Id"))
 	if clientID == "" {
 		clientID = strings.TrimSpace(c.Query("client_id"))

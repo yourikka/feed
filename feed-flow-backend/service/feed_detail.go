@@ -30,6 +30,17 @@ func GetFeedVideoIDs(query FeedQuery) (FeedIDPage, error) {
 			HasMore:    hasMore,
 			NextCursor: 0,
 		}, nil
+	case "follow":
+		videoIDs, nextToken, hasMore, err := getFollowVideoIDsPage(query.UserID, viewerKey, query.LegacyID, cursor, limit, query.FilterSeen)
+		if err != nil {
+			return FeedIDPage{}, err
+		}
+		return FeedIDPage{
+			VideoIDs:   videoIDs,
+			NextToken:  nextToken,
+			HasMore:    hasMore,
+			NextCursor: 0,
+		}, nil
 	default:
 		videoIDs, nextToken, hasMore, err := getLatestVideoIDsPage(viewerKey, query.LegacyID, cursor.LastID, limit, query.FilterSeen)
 		if err != nil {
@@ -56,6 +67,8 @@ func normalizeSortType(sortType string) string {
 	switch sortType {
 	case "hot":
 		return "hot"
+	case "follow":
+		return "follow"
 	default:
 		return "latest"
 	}

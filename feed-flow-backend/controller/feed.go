@@ -46,8 +46,8 @@ func Feed(c *gin.Context) {
 	}
 
 	sortType := strings.ToLower(strings.TrimSpace(c.DefaultQuery("sort", "latest")))
-	if sortType != "latest" && sortType != "hot" {
-		respondError(c, "sort 参数错误，支持 latest/hot", gin.H{
+	if sortType != "latest" && sortType != "hot" && sortType != "follow" {
+		respondError(c, "sort 参数错误，支持 latest/hot/follow", gin.H{
 			"video_list":  []any{},
 			"next_cursor": 0,
 			"next_token":  "",
