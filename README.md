@@ -90,3 +90,14 @@ npm ci
 npm run build
 npm run test
 ```
+
+## CI/CD
+
+- GitHub Actions CI 会自动执行：
+  - 后端 `go test ./...`
+  - 前端 `npm run build` 和 `npm run test`
+  - 前后端 Docker 镜像构建校验
+  - `docker compose` 启动完整依赖并执行 `./scripts/smoke.sh`
+- 当代码 push 到 `main` 分支后，流水线还会自动把镜像发布到 GHCR：
+  - `ghcr.io/<owner>/feed-backend`
+  - `ghcr.io/<owner>/feed-frontend`
