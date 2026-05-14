@@ -25,7 +25,15 @@ func InitDB() {
 	}
 	log.Println("Database connection established")
 	if getEnvAsBool("DB_AUTO_MIGRATE", false) {
-		err = DB.AutoMigrate(&model.User{}, &model.Video{}, &model.Comment{}, &model.Like{}, &model.Favorite{}, &model.Follow{})
+		err = DB.AutoMigrate(
+			&model.User{},
+			&model.Video{},
+			&model.Comment{},
+			&model.Like{},
+			&model.Favorite{},
+			&model.Follow{},
+			&model.VideoBehaviorEvent{},
+		)
 		if err != nil {
 			log.Fatalf("Failed to auto migrate database: %v", err)
 		}

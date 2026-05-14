@@ -39,6 +39,10 @@ func RecordHotEvent(videoID uint, delta float64) {
 }
 
 func GetHotVideoIDs(offset, limit int) ([]uint, int64, error) {
+	return GetHotVideoIDsByAggKey(buildAggKey(), offset, limit)
+}
+
+func GetHotVideoIDsByAggKey(aggKey string, offset, limit int) ([]uint, int64, error) {
 	if limit <= 0 {
 		return []uint{}, 0, nil
 	}
@@ -51,7 +55,9 @@ func GetHotVideoIDs(offset, limit int) ([]uint, int64, error) {
 		return []uint{}, 0, nil
 	}
 
-	aggKey := buildAggKey()
+	if aggKey == "" {
+		aggKey = buildAggKey()
+	}
 	if err := config.RDB.ZUnionStore(config.Ctx, aggKey, &redis.ZStore{Keys: keys}).Err(); err != nil {
 		return nil, 0, err
 	}

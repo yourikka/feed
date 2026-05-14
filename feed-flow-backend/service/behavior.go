@@ -1,0 +1,299 @@
+package service
+
+import (
+	"errors"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/go-redis/redis/v8"
+	"github.com/yourikka/feed-flow/config"
+	"github.com/yourikka/feed-flow/model"
+	"github.com/yourikka/feed-flow/ranking"
+)
+
+const (
+	EventExposure  = "exposure"
+	EventPlayStart = "play_start"
+	EventProgress  = "play_progress"
+	EventPlayEnd   = "play_finish"
+	EventPause     = "pause"
+	EventSkip      = "skip"
+
+	behaviorRequestKeyPrefix  = "feed:event:req:"
+	exposureDedupeKeyPrefix   = "feed:exposure:dedupe:"
+	recentExposureKeyPrefix   = "feed:user:exposed:"
+	behaviorRequestKeyTTL     = 24 * time.Hour
+	exposureDedupeBucketTTL   = 6 * time.Hour
+	recentExposureLookback    = 72 * time.Hour
+	recentExposureSetTTL      = 7 * 24 * time.Hour
+	maxRecentExposureScanSize = 500
+)
+
+type TrackVideoEventInput struct {
+	UserID     *uint
+	ClientID   string
+	VideoID    uint
+	EventType  string
+	RequestID  string
+	SessionID  string
+	ProgressMs int64
+	DurationMs int64
+	PositionMs int64
+}
+
+type TrackVideoEventResult struct {
+	Accepted bool
+	Deduped  bool
+}
+
+func BuildViewerKey(userID *uint, clientID string) string {
+	if userID != nil && *userID > 0 {
+		return "u:" + strconv.FormatUint(uint64(*userID), 10)
+	}
+	clientID = strings.TrimSpace(clientID)
+	if clientID == "" {
+		return ""
+	}
+	return "c:" + clientID
+}
+
+func TrackVideoEvent(input TrackVideoEventInput) (TrackVideoEventResult, error) {
+	eventType := strings.TrimSpace(strings.ToLower(input.EventType))
+	if !isSupportedVideoEvent(eventType) {
+		return TrackVideoEventResult{}, errors.New("不支持的事件类型")
+	}
+	if input.VideoID == 0 {
+		return TrackVideoEventResult{}, errors.New("video_id 参数错误")
+	}
+
+	viewerKey := BuildViewerKey(input.UserID, input.ClientID)
+	if viewerKey == "" {
+		return TrackVideoEventResult{}, errors.New("缺少用户身份或 client_id")
+	}
+
+	if ok, err := ensureVideoExists(input.VideoID); err != nil {
+		return TrackVideoEventResult{}, err
+	} else if !ok {
+		return TrackVideoEventResult{}, errors.New("视频不存在")
+	}
+
+	requestID := strings.TrimSpace(input.RequestID)
+	if requestID != "" {
+		deduped, err := reserveBehaviorRequest(requestID)
+		if err != nil {
+			return TrackVideoEventResult{}, err
+		}
+		if deduped {
+			return TrackVideoEventResult{Accepted: false, Deduped: true}, nil
+		}
+	}
+
+	if eventType == EventExposure {
+		unique, err := reserveUniqueExposure(viewerKey, input.VideoID, time.Now())
+		if err != nil {
+			return TrackVideoEventResult{}, err
+		}
+		if !unique {
+			return TrackVideoEventResult{Accepted: false, Deduped: true}, nil
+		}
+		recordRecentExposure(viewerKey, input.VideoID, time.Now())
+	}
+
+	if err := config.DB.Create(&model.VideoBehaviorEvent{
+		UserID:     derefUint(input.UserID),
+		ViewerKey:  viewerKey,
+		VideoID:    input.VideoID,
+		EventType:  eventType,
+		RequestID:  requestID,
+		SessionID:  strings.TrimSpace(input.SessionID),
+		ProgressMs: sanitizePositiveInt64(input.ProgressMs),
+		DurationMs: sanitizePositiveInt64(input.DurationMs),
+		PositionMs: sanitizePositiveInt64(input.PositionMs),
+	}).Error; err != nil {
+		return TrackVideoEventResult{}, err
+	}
+
+	ranking.RecordHotEvent(input.VideoID, scoreDeltaForEvent(eventType, input.ProgressMs, input.DurationMs, input.PositionMs))
+	return TrackVideoEventResult{Accepted: true}, nil
+}
+
+func FilterRecentlyExposedVideoIDs(viewerKey string, videoIDs []uint) ([]uint, error) {
+	if viewerKey == "" || len(videoIDs) == 0 {
+		return videoIDs, nil
+	}
+	exposedSet, err := getRecentExposureSet(viewerKey, max(maxRecentExposureScanSize, len(videoIDs)*5))
+	if err != nil {
+		return nil, err
+	}
+	if len(exposedSet) == 0 {
+		return videoIDs, nil
+	}
+
+	filtered := make([]uint, 0, len(videoIDs))
+	for _, videoID := range videoIDs {
+		if _, ok := exposedSet[videoID]; ok {
+			continue
+		}
+		filtered = append(filtered, videoID)
+	}
+	return filtered, nil
+}
+
+func FilterRecentlyExposedVideos(viewerKey string, videos []model.Video) ([]model.Video, error) {
+	if viewerKey == "" || len(videos) == 0 {
+		return videos, nil
+	}
+	videoIDs := make([]uint, 0, len(videos))
+	for _, video := range videos {
+		videoIDs = append(videoIDs, video.ID)
+	}
+	filteredIDs, err := FilterRecentlyExposedVideoIDs(viewerKey, videoIDs)
+	if err != nil {
+		return nil, err
+	}
+	if len(filteredIDs) == len(videoIDs) {
+		return videos, nil
+	}
+
+	allowed := make(map[uint]struct{}, len(filteredIDs))
+	for _, videoID := range filteredIDs {
+		allowed[videoID] = struct{}{}
+	}
+
+	filtered := make([]model.Video, 0, len(filteredIDs))
+	for _, video := range videos {
+		if _, ok := allowed[video.ID]; ok {
+			filtered = append(filtered, video)
+		}
+	}
+	return filtered, nil
+}
+
+func isSupportedVideoEvent(eventType string) bool {
+	switch eventType {
+	case EventExposure, EventPlayStart, EventProgress, EventPlayEnd, EventPause, EventSkip:
+		return true
+	default:
+		return false
+	}
+}
+
+func ensureVideoExists(videoID uint) (bool, error) {
+	var count int64
+	if err := config.DB.Model(&model.Video{}).Where("id = ?", videoID).Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+func reserveBehaviorRequest(requestID string) (bool, error) {
+	if config.RDB == nil || requestID == "" {
+		return false, nil
+	}
+	ok, err := config.RDB.SetNX(config.Ctx, behaviorRequestKeyPrefix+requestID, "1", behaviorRequestKeyTTL).Result()
+	if err != nil {
+		return false, err
+	}
+	return !ok, nil
+}
+
+func reserveUniqueExposure(viewerKey string, videoID uint, now time.Time) (bool, error) {
+	if config.RDB == nil {
+		return true, nil
+	}
+	bucket := now.UTC().Format("2006010215")
+	key := fmt.Sprintf("%s%s:%d:%s", exposureDedupeKeyPrefix, viewerKey, videoID, bucket)
+	ok, err := config.RDB.SetNX(config.Ctx, key, "1", exposureDedupeBucketTTL).Result()
+	if err != nil {
+		return false, err
+	}
+	return ok, nil
+}
+
+func recordRecentExposure(viewerKey string, videoID uint, now time.Time) {
+	if config.RDB == nil || viewerKey == "" || videoID == 0 {
+		return
+	}
+	key := recentExposureKeyPrefix + viewerKey
+	member := strconv.FormatUint(uint64(videoID), 10)
+	score := float64(now.Unix())
+	pipe := config.RDB.Pipeline()
+	pipe.ZAdd(config.Ctx, key, &redis.Z{Score: score, Member: member})
+	pipe.ZRemRangeByScore(config.Ctx, key, "-inf", strconv.FormatInt(now.Add(-recentExposureLookback).Unix(), 10))
+	pipe.Expire(config.Ctx, key, recentExposureSetTTL)
+	_, _ = pipe.Exec(config.Ctx)
+}
+
+func getRecentExposureSet(viewerKey string, limit int) (map[uint]struct{}, error) {
+	if config.RDB == nil || viewerKey == "" {
+		return map[uint]struct{}{}, nil
+	}
+	if limit <= 0 {
+		limit = maxRecentExposureScanSize
+	}
+	key := recentExposureKeyPrefix + viewerKey
+	minScore := strconv.FormatInt(time.Now().Add(-recentExposureLookback).Unix(), 10)
+	rows, err := config.RDB.ZRevRangeByScore(config.Ctx, key, &redis.ZRangeBy{
+		Max:   "+inf",
+		Min:   minScore,
+		Count: int64(limit),
+	}).Result()
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[uint]struct{}, len(rows))
+	for _, row := range rows {
+		videoID, parseErr := strconv.ParseUint(row, 10, 64)
+		if parseErr != nil || videoID == 0 {
+			continue
+		}
+		result[uint(videoID)] = struct{}{}
+	}
+	return result, nil
+}
+
+func scoreDeltaForEvent(eventType string, progressMs, durationMs, positionMs int64) float64 {
+	switch eventType {
+	case EventExposure:
+		return 0.2
+	case EventPlayStart:
+		return 0.8
+	case EventPlayEnd:
+		return 2.6
+	case EventProgress:
+		if durationMs > 0 {
+			ratio := float64(progressMs) / float64(durationMs)
+			switch {
+			case ratio >= 0.85:
+				return 1.6
+			case ratio >= 0.5:
+				return 0.8
+			}
+		}
+		if progressMs >= 5000 {
+			return 0.4
+		}
+	case EventSkip:
+		if positionMs > 0 && positionMs < 3000 {
+			return -0.6
+		}
+		return -0.2
+	}
+	return 0
+}
+
+func sanitizePositiveInt64(v int64) int64 {
+	if v < 0 {
+		return 0
+	}
+	return v
+}
+
+func derefUint(v *uint) uint {
+	if v == nil {
+		return 0
+	}
+	return *v
+}

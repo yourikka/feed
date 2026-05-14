@@ -1,6 +1,8 @@
 package service
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"strings"
 
@@ -30,6 +32,22 @@ type FeedVideo struct {
 	IsLiked       bool       `json:"IsLiked"`
 	IsFavorited   bool       `json:"IsFavorited"`
 	IsFollowing   bool       `json:"IsFollowing"`
+}
+
+type FeedCursor struct {
+	Mode     string `json:"mode"`
+	LastID   uint   `json:"last_id,omitempty"`
+	HotToken string `json:"hot_token,omitempty"`
+}
+
+type FeedQuery struct {
+	UserID     *uint
+	ClientID   string
+	Cursor     string
+	LegacyID   uint
+	Limit      int
+	SortType   string
+	FilterSeen bool
 }
 
 type videoCountRow struct {
@@ -253,90 +271,212 @@ func buildFeedVideos(videos []model.Video, userID *uint) ([]FeedVideo, error) {
 	return feedVideos, nil
 }
 
-func getLatestVideoFeed(userID *uint, cursor uint, limit int) ([]FeedVideo, uint, bool, error) {
+func encodeFeedCursor(cursor FeedCursor) string {
+	payload, err := json.Marshal(cursor)
+	if err != nil {
+		return ""
+	}
+	return base64.RawURLEncoding.EncodeToString(payload)
+}
+
+func decodeFeedCursor(raw string) (FeedCursor, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return FeedCursor{}, false
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		return FeedCursor{}, false
+	}
+	var cursor FeedCursor
+	if err := json.Unmarshal(decoded, &cursor); err != nil {
+		return FeedCursor{}, false
+	}
+	return cursor, true
+}
+
+func getLatestVideoFeed(userID *uint, viewerKey string, cursor uint, limit int, filterSeen bool) ([]FeedVideo, string, bool, error) {
 	limit = normalizeFeedLimit(limit)
 
-	query := config.DB.Preload("Author").Order("id desc")
-	if cursor > 0 {
-		query = query.Where("id < ?", cursor)
+	fetchLimit := limit + 6
+	lastID := cursor
+	filteredVideos := make([]model.Video, 0, limit+1)
+	hasMore := false
+
+	for attempt := 0; attempt < 3 && len(filteredVideos) < limit+1; attempt++ {
+		query := config.DB.Preload("Author").Order("id desc")
+		if lastID > 0 {
+			query = query.Where("id < ?", lastID)
+		}
+
+		var batch []model.Video
+		err := query.Limit(fetchLimit).Find(&batch).Error
+		if err != nil {
+			return nil, "", false, err
+		}
+		if len(batch) == 0 {
+			break
+		}
+
+		candidates := batch
+		if filterSeen {
+			var filterErr error
+			candidates, filterErr = FilterRecentlyExposedVideos(viewerKey, batch)
+			if filterErr != nil {
+				return nil, "", false, filterErr
+			}
+		}
+		filteredVideos = append(filteredVideos, candidates...)
+		lastID = batch[len(batch)-1].ID
+		if len(batch) < fetchLimit {
+			break
+		}
 	}
 
-	var videos []model.Video
-	err := query.Limit(limit + 1).Find(&videos).Error
+	if len(filteredVideos) > limit {
+		hasMore = true
+		filteredVideos = filteredVideos[:limit]
+	}
+
+	if !hasMore && len(filteredVideos) == limit && lastID > 0 {
+		hasMore = true
+	}
+
+	feedVideos, err := buildFeedVideos(filteredVideos, userID)
 	if err != nil {
-		return nil, 0, false, err
+		return nil, "", false, err
 	}
 
-	hasMore := len(videos) > limit
-	if hasMore {
-		videos = videos[:limit]
-	}
-
-	feedVideos, err := buildFeedVideos(videos, userID)
-	if err != nil {
-		return nil, 0, false, err
-	}
-
-	nextCursor := uint(0)
-	if hasMore && len(videos) > 0 {
-		nextCursor = videos[len(videos)-1].ID
+	nextCursor := ""
+	if hasMore && len(filteredVideos) > 0 {
+		nextCursor = encodeFeedCursor(FeedCursor{
+			Mode:   "latest",
+			LastID: filteredVideos[len(filteredVideos)-1].ID,
+		})
 	}
 
 	return feedVideos, nextCursor, hasMore, nil
 }
 
-func getHotVideoFeed(userID *uint, cursor uint, limit int) ([]FeedVideo, uint, bool, error) {
+func getHotVideoFeed(userID *uint, viewerKey string, cursorToken string, legacyCursor uint, limit int, filterSeen bool) ([]FeedVideo, string, bool, error) {
 	limit = normalizeFeedLimit(limit)
-	offset := int(cursor)
 
-	videoIDs, total, err := ranking.GetHotVideoIDs(offset, limit)
+	offset := int(legacyCursor)
+	snapshotToken := strings.TrimSpace(cursorToken)
+	if snapshotToken == "" {
+		snapshotToken = ranking.BuildHotSnapshotCursor(offset)
+	}
+
+	snapshot, ok := ranking.ParseHotSnapshotCursor(snapshotToken)
+	if !ok || ranking.IsHotSnapshotCursorExpired(snapshot) {
+		snapshotToken = ranking.BuildHotSnapshotCursor(offset)
+		snapshot, ok = ranking.ParseHotSnapshotCursor(snapshotToken)
+		if !ok {
+			return nil, "", false, errors.New("热榜游标解析失败")
+		}
+	}
+	if snapshot.Offset > 0 {
+		offset = snapshot.Offset
+	}
+
+	videoIDs, total, err := ranking.GetHotVideoIDsByAggKey(snapshot.AggKey, offset, limit+12)
 	if err != nil {
-		return nil, 0, false, err
+		return nil, "", false, err
 	}
 	if len(videoIDs) == 0 {
-		return []FeedVideo{}, 0, false, nil
+		return []FeedVideo{}, "", false, nil
+	}
+
+	if filterSeen {
+		videoIDs, err = FilterRecentlyExposedVideoIDs(viewerKey, videoIDs)
+		if err != nil {
+			return nil, "", false, err
+		}
+	}
+	if len(videoIDs) > limit {
+		videoIDs = videoIDs[:limit]
+	}
+	if len(videoIDs) == 0 {
+		return []FeedVideo{}, "", false, nil
 	}
 
 	videos, err := getVideosByIDsOrdered(videoIDs)
 	if err != nil {
-		return nil, 0, false, err
+		return nil, "", false, err
 	}
 	if len(videos) == 0 {
-		return []FeedVideo{}, 0, false, nil
+		return []FeedVideo{}, "", false, nil
 	}
 
 	feedVideos, err := buildFeedVideos(videos, userID)
 	if err != nil {
-		return nil, 0, false, err
+		return nil, "", false, err
 	}
 
 	next := offset + len(feedVideos)
 	hasMore := int64(next) < total
-	nextCursor := uint(0)
+	nextCursor := ""
 	if hasMore {
-		nextCursor = uint(next)
+		nextCursor = ranking.EncodeHotSnapshotCursor(ranking.HotSnapshotCursor{
+			AggKey:  snapshot.AggKey,
+			Offset:  next,
+			Window:  snapshot.Window,
+			Created: snapshot.Created,
+		})
 	}
 	return feedVideos, nextCursor, hasMore, nil
 }
 
 // GetVideoFeed 获取视频流数据和交互状态
 func GetVideoFeed(userID *uint, cursor uint, limit int) ([]FeedVideo, uint, bool, error) {
-	return GetVideoFeedBySort(userID, cursor, limit, "latest")
+	videos, _, hasMore, err := GetVideoFeedByQuery(FeedQuery{
+		UserID:   userID,
+		LegacyID: cursor,
+		Limit:    limit,
+		SortType: "latest",
+	})
+	return videos, cursor, hasMore, err
 }
 
 func GetVideoFeedBySort(userID *uint, cursor uint, limit int, sortType string) ([]FeedVideo, uint, bool, error) {
-	switch strings.ToLower(strings.TrimSpace(sortType)) {
+	videos, _, hasMore, err := GetVideoFeedByQuery(FeedQuery{
+		UserID:   userID,
+		LegacyID: cursor,
+		Limit:    limit,
+		SortType: sortType,
+	})
+	return videos, cursor, hasMore, err
+}
+
+func GetVideoFeedByQuery(query FeedQuery) ([]FeedVideo, string, bool, error) {
+	viewerKey := BuildViewerKey(query.UserID, query.ClientID)
+	limit := normalizeFeedLimit(query.Limit)
+	cursor := FeedCursor{}
+	if decoded, ok := decodeFeedCursor(query.Cursor); ok {
+		cursor = decoded
+	}
+
+	sortType := strings.ToLower(strings.TrimSpace(query.SortType))
+	switch sortType {
 	case "", "latest":
-		return getLatestVideoFeed(userID, cursor, limit)
+		currentCursor := query.LegacyID
+		if cursor.LastID > 0 {
+			currentCursor = cursor.LastID
+		}
+		return getLatestVideoFeed(query.UserID, viewerKey, currentCursor, limit, query.FilterSeen)
 	case "hot":
-		videos, next, more, err := getHotVideoFeed(userID, cursor, limit)
+		hotToken := cursor.HotToken
+		if hotToken == "" {
+			hotToken = query.Cursor
+		}
+		videos, next, more, err := getHotVideoFeed(query.UserID, viewerKey, hotToken, query.LegacyID, limit, query.FilterSeen)
 		if err != nil {
 			// 热榜依赖 Redis，异常时自动降级回最新流。
-			return getLatestVideoFeed(userID, cursor, limit)
+			return getLatestVideoFeed(query.UserID, viewerKey, query.LegacyID, limit, query.FilterSeen)
 		}
 		return videos, next, more, nil
 	default:
-		return getLatestVideoFeed(userID, cursor, limit)
+		return getLatestVideoFeed(query.UserID, viewerKey, query.LegacyID, limit, query.FilterSeen)
 	}
 }
 

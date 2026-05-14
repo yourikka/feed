@@ -16,6 +16,9 @@
 - `GET /douyin/feed/?sort=latest|hot&cursor=<n>&limit=<n>`
 - `sort=latest` 使用时间倒序游标分页
 - `sort=hot` 使用滑动窗口热榜（Redis ZSet，`cursor` 为偏移量）
+- 新版前端优先使用 `cursor_token` 翻页，后端响应 `next_token`
+- `GET /douyin/feed/` 支持 `client_id`、`filter_seen=1`，可做曝光去重与已曝光过滤
+- `POST /douyin/feed/event/` 用于上报 `exposure/play_start/play_progress/play_finish/pause/skip`
 
 ## Start
 
@@ -74,6 +77,8 @@ k6 run -e BASE_URL=http://localhost:8080 -e TOKEN_POOL_SIZE=50 scripts/k6/feed_o
 
 ```bash
 cd feed-flow-backend
+export GOCACHE=/home/rikka/.marscode/.gocache
+export GOMODCACHE=/home/rikka/.marscode/.gomodcache
 JWT_SECRET=0123456789abcdef0123456789abcdef go test ./...
 ```
 

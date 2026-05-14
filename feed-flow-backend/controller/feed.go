@@ -24,19 +24,22 @@ func Feed(c *gin.Context) {
 	}
 
 	cursor, err := strconv.ParseUint(c.DefaultQuery("cursor", "0"), 10, 64)
-	if err != nil {
+	if err != nil && strings.TrimSpace(c.Query("cursor")) != "" {
 		respondError(c, "cursor 参数错误", gin.H{
 			"video_list":  []any{},
 			"next_cursor": 0,
+			"next_token":  "",
 			"has_more":    false,
 		})
 		return
 	}
+	cursorToken := strings.TrimSpace(c.Query("cursor_token"))
 	limit, err := strconv.Atoi(c.DefaultQuery("limit", "10"))
 	if err != nil || limit <= 0 {
 		respondError(c, "limit 参数错误", gin.H{
 			"video_list":  []any{},
 			"next_cursor": 0,
+			"next_token":  "",
 			"has_more":    false,
 		})
 		return
@@ -47,24 +50,42 @@ func Feed(c *gin.Context) {
 		respondError(c, "sort 参数错误，支持 latest/hot", gin.H{
 			"video_list":  []any{},
 			"next_cursor": 0,
+			"next_token":  "",
 			"has_more":    false,
 		})
 		return
 	}
 
-	videos, nextCursor, hasMore, err := service.GetVideoFeedBySort(userID, uint(cursor), limit, sortType)
+	filterSeen := strings.EqualFold(strings.TrimSpace(c.DefaultQuery("filter_seen", "1")), "1")
+	clientID := strings.TrimSpace(c.GetHeader("X-Client-Id"))
+	if clientID == "" {
+		clientID = strings.TrimSpace(c.Query("client_id"))
+	}
+
+	videos, nextToken, hasMore, err := service.GetVideoFeedByQuery(service.FeedQuery{
+		UserID:     userID,
+		ClientID:   clientID,
+		Cursor:     cursorToken,
+		LegacyID:   uint(cursor),
+		Limit:      limit,
+		SortType:   sortType,
+		FilterSeen: filterSeen,
+	})
 	if err != nil {
 		respondError(c, "获取视频流失败", gin.H{
 			"video_list":  []any{},
 			"next_cursor": 0,
+			"next_token":  "",
 			"has_more":    false,
 		})
 		return
 	}
 
+	nextCursor := 0
 	respondSuccess(c, "获取成功", gin.H{
 		"video_list":  videos,
 		"next_cursor": nextCursor,
+		"next_token":  nextToken,
 		"has_more":    hasMore,
 	})
 }

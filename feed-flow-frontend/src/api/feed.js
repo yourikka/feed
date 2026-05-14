@@ -9,6 +9,15 @@ export const getFeedList = (params = {}) => {
 }
 
 /**
+ * 上报 feed 播放行为事件
+ * @param {Object} data 行为事件数据
+ * @returns 后端返回的处理结果
+ */
+export const trackFeedEvent = (data) => {
+  return request.post('/feed/event/', data)
+}
+
+/**
  * 发布视频接口
  * @param {FormData} data 发布参数（title标题、视频文件、封面文件）
  * @returns 后端返回的发布结果
