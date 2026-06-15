@@ -15,6 +15,7 @@ import (
 	"github.com/yourikka/feed-flow/config"
 	"github.com/yourikka/feed-flow/model"
 	"github.com/yourikka/feed-flow/mq"
+	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
@@ -106,21 +107,28 @@ func StartInteractionWorker(ctx context.Context) {
 }
 
 func publishInteractionCommand(cmd interactionCommand) error {
+	return publishInteractionCommandTx(nil, cmd)
+}
+
+func publishInteractionCommandTx(tx *gorm.DB, cmd interactionCommand) error {
 	payload, err := json.Marshal(cmd)
 	if err != nil {
 		return err
 	}
-
-	return mq.PublishMessage(
-		"",
-		config.InteractionEventQueue,
-		amqp091.Publishing{
+	message := mq.OutboxMessage{
+		Exchange:   "",
+		RoutingKey: config.InteractionEventQueue,
+		Publishing: amqp091.Publishing{
 			ContentType:  "application/json",
 			Body:         payload,
 			DeliveryMode: amqp091.Persistent,
 			Timestamp:    time.Now(),
 		},
-	)
+	}
+	if tx != nil {
+		return mq.SaveOutboxMessage(tx, message)
+	}
+	return mq.PublishMessage(message.Exchange, message.RoutingKey, message.Publishing)
 }
 
 func handleInteractionMessage(msg amqp091.Delivery) {

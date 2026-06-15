@@ -96,22 +96,22 @@ func idRowsToMap(rows []videoIDRow) map[uint]bool {
 
 // PublishVideo 发布视频
 func PublishVideo(title, playUrl, coverUrl string, authorId uint) error {
-	video := model.Video{
-		Title:    title,
-		PlayUrl:  playUrl,
-		CoverUrl: coverUrl,
-		AuthorID: authorId,
-	}
-	// 保存视频到数据库
-	if err := config.DB.Create(&video).Error; err != nil {
-		return err
-	}
-	ranking.RecordHotEvent(video.ID, ranking.ScorePublish)
-	fanoutVideoToFollowers(video.ID, authorId)
-	// 发布视频到mq
-	mq.PublishVideo(video.ID)
-	return nil
-
+	var video model.Video
+	return config.DB.Transaction(func(tx *gorm.DB) error {
+		video = model.Video{
+			Title:    title,
+			PlayUrl:  playUrl,
+			CoverUrl: coverUrl,
+			AuthorID: authorId,
+		}
+		if err := tx.Create(&video).Error; err != nil {
+			return err
+		}
+		if err := fanoutVideoToFollowersTx(tx, video.ID, authorId); err != nil {
+			return err
+		}
+		return mq.SaveOutboxMessage(tx, mq.BuildVideoPublishOutboxMessage(video.ID))
+	})
 }
 
 func getFollowPushThreshold() int64 {
@@ -127,29 +127,37 @@ func getFollowPushThreshold() int64 {
 }
 
 func fanoutVideoToFollowers(videoID, authorID uint) {
+	_ = fanoutVideoToFollowersTx(config.DB, videoID, authorID)
+}
+
+func fanoutVideoToFollowersTx(tx *gorm.DB, videoID, authorID uint) error {
+	if tx == nil {
+		return errors.New("nil transaction")
+	}
+
 	var followerCount int64
-	if err := config.DB.Model(&model.Follow{}).
+	if err := tx.Model(&model.Follow{}).
 		Where("target_user_id = ?", authorID).
 		Count(&followerCount).Error; err != nil {
-		return
+		return err
 	}
 	if followerCount == 0 {
-		return
+		return nil
 	}
 	if followerCount > getFollowPushThreshold() {
 		// 大V走拉模式，不做写扩散。
-		return
+		return nil
 	}
 
 	var followers []followIDRow
-	if err := config.DB.Model(&model.Follow{}).
+	if err := tx.Model(&model.Follow{}).
 		Select("user_id as target_user_id").
 		Where("target_user_id = ?", authorID).
 		Scan(&followers).Error; err != nil {
-		return
+		return err
 	}
 	if len(followers) == 0 {
-		return
+		return nil
 	}
 
 	inboxes := make([]model.FollowFeedInbox, 0, len(followers))
@@ -164,9 +172,9 @@ func fanoutVideoToFollowers(videoID, authorID uint) {
 		})
 	}
 	if len(inboxes) == 0 {
-		return
+		return nil
 	}
-	_ = config.DB.Clauses(clause.OnConflict{
+	return tx.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "user_id"}, {Name: "video_id"}},
 		DoNothing: true,
 	}).Create(&inboxes).Error

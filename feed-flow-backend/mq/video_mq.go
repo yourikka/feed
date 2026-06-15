@@ -17,6 +17,7 @@ import (
 const (
 	videoPublishMaxRetry = 3
 	publishTimeout       = 5 * time.Second
+	videoPublishDedupTTL = 7 * 24 * time.Hour
 )
 
 var publisherState = struct {
@@ -28,21 +29,30 @@ var publisherState = struct {
 
 // PublishVideo 发送消息：视频发布成功后异步通知
 func PublishVideo(videoID uint) {
-	err := PublishMessage(
-		"",
-		config.VideoPublishQueue,
-		amqp091.Publishing{
-			ContentType:  "text/plain",
-			Body:         []byte(strconv.Itoa(int(videoID))),
-			DeliveryMode: amqp091.Persistent,
-			Timestamp:    time.Now(),
-		},
-	)
+	err := PublishMessage("", config.VideoPublishQueue, buildVideoPublishPublishing(videoID))
 	if err != nil {
 		log.Println("mq发送消息失败:", err)
 		if syncErr := processVideoPublish(int(videoID)); syncErr != nil {
 			log.Printf("mq降级同步处理失败 video_id=%d err=%v", videoID, syncErr)
 		}
+	}
+}
+
+func BuildVideoPublishOutboxMessage(videoID uint) OutboxMessage {
+	return OutboxMessage{
+		Exchange:   "",
+		RoutingKey: config.VideoPublishQueue,
+		Publishing: buildVideoPublishPublishing(videoID),
+	}
+}
+
+func buildVideoPublishPublishing(videoID uint) amqp091.Publishing {
+	return amqp091.Publishing{
+		ContentType:  "text/plain",
+		Body:         []byte(strconv.Itoa(int(videoID))),
+		DeliveryMode: amqp091.Persistent,
+		MessageId:    buildVideoPublishMessageID(videoID),
+		Timestamp:    time.Now(),
 	}
 }
 
@@ -123,6 +133,12 @@ func handleVideoMessage(msg amqp091.Delivery) {
 		handleFinalFailure(msg, retryCount, err)
 		return
 	}
+	if isVideoPublishMessageHandled(msg.MessageId, uint(videoID)) {
+		if err := msg.Ack(false); err != nil {
+			log.Printf("mq ack duplicate video publish failed message_id=%s err=%v", msg.MessageId, err)
+		}
+		return
+	}
 
 	if err := processVideoPublish(videoID); err != nil {
 		log.Printf("mq处理失败 video_id=%d retry=%d err=%v", videoID, retryCount, err)
@@ -143,6 +159,29 @@ func processVideoPublish(videoID int) error {
 	log.Println("收到mq消息,处理视频发布:", videoID)
 	ranking.RecordHotEvent(uint(videoID), ranking.ScorePublish)
 	return nil
+}
+
+func buildVideoPublishMessageID(videoID uint) string {
+	return "video_publish:" + strconv.FormatUint(uint64(videoID), 10)
+}
+
+func videoPublishDedupKey(messageID string) string {
+	return "mq:video_publish:done:" + messageID
+}
+
+func isVideoPublishMessageHandled(messageID string, videoID uint) bool {
+	client := config.GetRedisClient()
+	if client == nil {
+		return false
+	}
+	if messageID == "" {
+		messageID = buildVideoPublishMessageID(videoID)
+	}
+	ok, err := client.SetNX(config.Ctx, videoPublishDedupKey(messageID), "1", videoPublishDedupTTL).Result()
+	if err != nil {
+		return false
+	}
+	return !ok
 }
 
 func handleConsumeFailure(msg amqp091.Delivery, retryCount int, cause error) {

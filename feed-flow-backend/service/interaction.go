@@ -176,7 +176,9 @@ func toggleVideoInteraction(kind interactionKind, videoID, userID uint) (bool, e
 		DesiredState: nextState,
 		Version:      nextVersion,
 	}
-	if err := publishInteractionCommand(cmd); err != nil {
+	if err := config.DB.Transaction(func(tx *gorm.DB) error {
+		return publishInteractionCommandTx(tx, cmd)
+	}); err != nil {
 		if syncErr := applyInteractionCommand(cmd); syncErr != nil {
 			return false, syncErr
 		}

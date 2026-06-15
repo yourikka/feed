@@ -1,6 +1,10 @@
 package service
 
-import "testing"
+import (
+	"testing"
+
+	"gorm.io/gorm"
+)
 
 func TestNormalizeFeedLimit(t *testing.T) {
 	tests := []struct {
@@ -171,5 +175,13 @@ func TestSelectHotVideoIDsPage(t *testing.T) {
 				t.Fatalf("selectHotVideoIDsPage() hasMore = %v, want %v", gotHasMore, tt.wantHasMore)
 			}
 		})
+	}
+}
+
+func TestFanoutVideoToFollowersTxNil(t *testing.T) {
+	var tx *gorm.DB
+	err := fanoutVideoToFollowersTx(tx, 1, 2)
+	if err == nil {
+		t.Fatalf("fanoutVideoToFollowersTx() expected error for nil tx")
 	}
 }

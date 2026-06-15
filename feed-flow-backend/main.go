@@ -51,6 +51,11 @@ func main() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		mq.StartOutboxPublisher(ctx)
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
 		service.StartBehaviorEventWorker(ctx)
 	}()
 	wg.Add(1)

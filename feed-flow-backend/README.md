@@ -17,7 +17,8 @@
 ## Runtime Notes
 
 - Redis/RabbitMQ 不可用时会降级启动，并在后台自动重连
-- 发布事件优先走 MQ；MQ 不可用时会同步兜底处理
+- 行为事件优先走 MQ；MQ 不可用时会同步兜底处理
+- 视频发布与互动命令采用 DB outbox，先落库再异步投递 MQ，降低 DB/MQ 双写不一致
 - 热榜使用 Redis 滑动窗口聚合（按小时桶）
 - Feed 支持基于 `client_id/user_id` 的曝光去重和最近曝光过滤
 - 热榜分页支持带签名的快照 token，避免动态榜单 offset 翻页重复/漏数
@@ -30,6 +31,7 @@
 - `feed/details` 支持 `client_id`，匿名用户也可命中 viewer 维度缓存
 - Feed 卡片缓存失效使用“索引集合 + UNLINK”，避免 Redis `KEYS` 阻塞
 - MQ 发布通道复用，减少高并发下频繁创建 channel 的开销
+- Outbox publisher 后台轮询 `mq_outbox_messages`，发布成功后删除，失败会按重试间隔回退
 
 ## Run
 

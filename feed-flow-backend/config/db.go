@@ -64,6 +64,7 @@ func InitDB() {
 			&model.Follow{},
 			&model.FollowFeedInbox{},
 			&model.VideoBehaviorEvent{},
+			&model.MQOutboxMessage{},
 		)
 		if err != nil {
 			log.Fatalf("Failed to auto migrate database: %v", err)
