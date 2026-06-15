@@ -12,6 +12,7 @@ import (
 	"github.com/yourikka/feed-flow/config"
 	"github.com/yourikka/feed-flow/model"
 	"github.com/yourikka/feed-flow/ranking"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -111,7 +112,7 @@ func TrackVideoEvent(ctx context.Context, input TrackVideoEventInput) (TrackVide
 	event.EventID = buildBehaviorEventID(event)
 
 	if !enqueueVideoEventWithContext(ctx, event) {
-		if err := persistAcceptedVideoEvent(ctx, TrackVideoEventInput{
+		inserted, err := persistAcceptedVideoEvent(ctx, TrackVideoEventInput{
 			UserID:     uintPtr(event.UserID),
 			VideoID:    event.VideoID,
 			EventType:  event.EventType,
@@ -120,11 +121,15 @@ func TrackVideoEvent(ctx context.Context, input TrackVideoEventInput) (TrackVide
 			ProgressMs: event.ProgressMs,
 			DurationMs: event.DurationMs,
 			PositionMs: event.PositionMs,
-		}, event.ViewerKey); err != nil {
+		}, event.ViewerKey)
+		if err != nil {
 			return TrackVideoEventResult{}, err
 		}
 		if err := finalizeAcceptedVideoEvent(ctx, requestID, eventType, viewerKey, input.VideoID, now); err != nil {
 			return TrackVideoEventResult{}, err
+		}
+		if !inserted {
+			return TrackVideoEventResult{Accepted: false, Deduped: true}, nil
 		}
 		return TrackVideoEventResult{Accepted: true}, nil
 	}
@@ -134,7 +139,7 @@ func TrackVideoEvent(ctx context.Context, input TrackVideoEventInput) (TrackVide
 	return TrackVideoEventResult{Accepted: true}, nil
 }
 
-func persistAcceptedVideoEvent(ctx context.Context, input TrackVideoEventInput, viewerKey string) error {
+func persistAcceptedVideoEvent(ctx context.Context, input TrackVideoEventInput, viewerKey string) (bool, error) {
 	eventType := strings.TrimSpace(strings.ToLower(input.EventType))
 	event := queuedVideoEvent{
 		UserID:     derefUint(input.UserID),
@@ -148,7 +153,7 @@ func persistAcceptedVideoEvent(ctx context.Context, input TrackVideoEventInput, 
 		PositionMs: sanitizePositiveInt64(input.PositionMs),
 	}
 	event.EventID = buildBehaviorEventID(event)
-	if err := config.DB.Create(&model.VideoBehaviorEvent{
+	result := config.DB.Clauses(clause.OnConflict{DoNothing: true}).Create(&model.VideoBehaviorEvent{
 		EventID:    event.EventID,
 		UserID:     event.UserID,
 		ViewerKey:  event.ViewerKey,
@@ -159,11 +164,15 @@ func persistAcceptedVideoEvent(ctx context.Context, input TrackVideoEventInput, 
 		ProgressMs: event.ProgressMs,
 		DurationMs: event.DurationMs,
 		PositionMs: event.PositionMs,
-	}).Error; err != nil {
-		return err
+	})
+	if result.Error != nil {
+		return false, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return false, nil
 	}
 	ranking.RecordHotEvent(ctx, input.VideoID, scoreDeltaForEvent(eventType, input.ProgressMs, input.DurationMs, input.PositionMs))
-	return nil
+	return true, nil
 }
 
 func FilterRecentlyExposedVideoIDs(viewerKey string, videoIDs []uint) ([]uint, error) {

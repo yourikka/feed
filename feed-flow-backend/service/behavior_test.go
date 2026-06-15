@@ -89,3 +89,16 @@ func TestBuildBehaviorEventID(t *testing.T) {
 		t.Fatal("buildBehaviorEventID(without request id) should not be empty")
 	}
 }
+
+func TestShouldScoreBehaviorEvent(t *testing.T) {
+	t.Parallel()
+
+	event := queuedVideoEvent{RequestID: "req-7"}
+	inserted := map[string]struct{}{"req:req-7": {}}
+	if !shouldScoreBehaviorEvent(event, inserted) {
+		t.Fatal("expected shouldScoreBehaviorEvent to return true for inserted event")
+	}
+	if shouldScoreBehaviorEvent(event, map[string]struct{}{}) {
+		t.Fatal("expected shouldScoreBehaviorEvent to return false for duplicate event")
+	}
+}
