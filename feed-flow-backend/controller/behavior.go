@@ -36,7 +36,7 @@ func TrackVideoEvent(c *gin.Context) {
 		}
 	}
 
-	result, err := service.TrackVideoEvent(service.TrackVideoEventInput{
+	result, err := service.TrackVideoEvent(c.Request.Context(), service.TrackVideoEventInput{
 		UserID:     userID,
 		ClientID:   strings.TrimSpace(req.ClientID),
 		VideoID:    req.VideoID,

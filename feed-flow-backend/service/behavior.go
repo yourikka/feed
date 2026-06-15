@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
@@ -59,7 +60,7 @@ func BuildViewerKey(userID *uint, clientID string) string {
 	return "c:" + clientID
 }
 
-func TrackVideoEvent(input TrackVideoEventInput) (TrackVideoEventResult, error) {
+func TrackVideoEvent(ctx context.Context, input TrackVideoEventInput) (TrackVideoEventResult, error) {
 	eventType := strings.TrimSpace(strings.ToLower(input.EventType))
 	if !isSupportedVideoEvent(eventType) {
 		return TrackVideoEventResult{}, errors.New("不支持的事件类型")
@@ -75,7 +76,7 @@ func TrackVideoEvent(input TrackVideoEventInput) (TrackVideoEventResult, error) 
 
 	requestID := strings.TrimSpace(input.RequestID)
 	if requestID != "" {
-		deduped, err := reserveBehaviorRequest(requestID)
+		deduped, err := behaviorRequestExists(requestID)
 		if err != nil {
 			return TrackVideoEventResult{}, err
 		}
@@ -84,18 +85,19 @@ func TrackVideoEvent(input TrackVideoEventInput) (TrackVideoEventResult, error) 
 		}
 	}
 
+	now := time.Now()
 	if eventType == EventExposure {
-		unique, err := reserveUniqueExposure(viewerKey, input.VideoID, time.Now())
+		unique, err := isUniqueExposure(ctx, viewerKey, input.VideoID, now)
 		if err != nil {
 			return TrackVideoEventResult{}, err
 		}
 		if !unique {
 			return TrackVideoEventResult{Accepted: false, Deduped: true}, nil
 		}
-		recordRecentExposure(viewerKey, input.VideoID, time.Now())
 	}
 
 	event := queuedVideoEvent{
+		EventID:    "",
 		UserID:     derefUint(input.UserID),
 		ViewerKey:  viewerKey,
 		VideoID:    input.VideoID,
@@ -106,9 +108,10 @@ func TrackVideoEvent(input TrackVideoEventInput) (TrackVideoEventResult, error) 
 		DurationMs: sanitizePositiveInt64(input.DurationMs),
 		PositionMs: sanitizePositiveInt64(input.PositionMs),
 	}
+	event.EventID = buildBehaviorEventID(event)
 
-	if !enqueueVideoEvent(event) {
-		if err := persistAcceptedVideoEvent(TrackVideoEventInput{
+	if !enqueueVideoEventWithContext(ctx, event) {
+		if err := persistAcceptedVideoEvent(ctx, TrackVideoEventInput{
 			UserID:     uintPtr(event.UserID),
 			VideoID:    event.VideoID,
 			EventType:  event.EventType,
@@ -120,13 +123,20 @@ func TrackVideoEvent(input TrackVideoEventInput) (TrackVideoEventResult, error) 
 		}, event.ViewerKey); err != nil {
 			return TrackVideoEventResult{}, err
 		}
+		if err := finalizeAcceptedVideoEvent(ctx, requestID, eventType, viewerKey, input.VideoID, now); err != nil {
+			return TrackVideoEventResult{}, err
+		}
+		return TrackVideoEventResult{Accepted: true}, nil
+	}
+	if err := finalizeAcceptedVideoEvent(ctx, requestID, eventType, viewerKey, input.VideoID, now); err != nil {
+		return TrackVideoEventResult{}, err
 	}
 	return TrackVideoEventResult{Accepted: true}, nil
 }
 
-func persistAcceptedVideoEvent(input TrackVideoEventInput, viewerKey string) error {
+func persistAcceptedVideoEvent(ctx context.Context, input TrackVideoEventInput, viewerKey string) error {
 	eventType := strings.TrimSpace(strings.ToLower(input.EventType))
-	if err := config.DB.Create(&model.VideoBehaviorEvent{
+	event := queuedVideoEvent{
 		UserID:     derefUint(input.UserID),
 		ViewerKey:  viewerKey,
 		VideoID:    input.VideoID,
@@ -136,10 +146,23 @@ func persistAcceptedVideoEvent(input TrackVideoEventInput, viewerKey string) err
 		ProgressMs: sanitizePositiveInt64(input.ProgressMs),
 		DurationMs: sanitizePositiveInt64(input.DurationMs),
 		PositionMs: sanitizePositiveInt64(input.PositionMs),
+	}
+	event.EventID = buildBehaviorEventID(event)
+	if err := config.DB.Create(&model.VideoBehaviorEvent{
+		EventID:    event.EventID,
+		UserID:     event.UserID,
+		ViewerKey:  event.ViewerKey,
+		VideoID:    event.VideoID,
+		EventType:  event.EventType,
+		RequestID:  event.RequestID,
+		SessionID:  event.SessionID,
+		ProgressMs: event.ProgressMs,
+		DurationMs: event.DurationMs,
+		PositionMs: event.PositionMs,
 	}).Error; err != nil {
 		return err
 	}
-	ranking.RecordHotEvent(input.VideoID, scoreDeltaForEvent(eventType, input.ProgressMs, input.DurationMs, input.PositionMs))
+	ranking.RecordHotEvent(ctx, input.VideoID, scoreDeltaForEvent(eventType, input.ProgressMs, input.DurationMs, input.PositionMs))
 	return nil
 }
 
@@ -204,33 +227,59 @@ func isSupportedVideoEvent(eventType string) bool {
 	}
 }
 
-func reserveBehaviorRequest(requestID string) (bool, error) {
+func behaviorRequestExists(requestID string) (bool, error) {
 	client := config.GetRedisClient()
 	if client == nil || requestID == "" {
 		return false, nil
 	}
-	ok, err := client.SetNX(config.Ctx, behaviorRequestKeyPrefix+requestID, "1", behaviorRequestKeyTTL).Result()
+	redisCtx, cancel := config.WithRedisTimeout(context.Background())
+	defer cancel()
+	exists, err := client.Exists(redisCtx, behaviorRequestKeyPrefix+requestID).Result()
 	if err != nil {
 		return false, err
 	}
-	return !ok, nil
+	return exists > 0, nil
 }
 
-func reserveUniqueExposure(viewerKey string, videoID uint, now time.Time) (bool, error) {
+func isUniqueExposure(ctx context.Context, viewerKey string, videoID uint, now time.Time) (bool, error) {
 	client := config.GetRedisClient()
 	if client == nil {
 		return true, nil
 	}
 	bucket := now.UTC().Format("2006010215")
 	key := fmt.Sprintf("%s%s:%d:%s", exposureDedupeKeyPrefix, viewerKey, videoID, bucket)
-	ok, err := client.SetNX(config.Ctx, key, "1", exposureDedupeBucketTTL).Result()
+	redisCtx, cancel := config.WithRedisTimeout(ctx)
+	defer cancel()
+	exists, err := client.Exists(redisCtx, key).Result()
 	if err != nil {
 		return false, err
 	}
-	return ok, nil
+	return exists == 0, nil
 }
 
-func recordRecentExposure(viewerKey string, videoID uint, now time.Time) {
+func recordBehaviorRequest(ctx context.Context, requestID string) error {
+	client := config.GetRedisClient()
+	if client == nil || requestID == "" {
+		return nil
+	}
+	redisCtx, cancel := config.WithRedisTimeout(ctx)
+	defer cancel()
+	return client.Set(redisCtx, behaviorRequestKeyPrefix+requestID, "1", behaviorRequestKeyTTL).Err()
+}
+
+func recordUniqueExposure(ctx context.Context, viewerKey string, videoID uint, now time.Time) error {
+	client := config.GetRedisClient()
+	if client == nil || viewerKey == "" || videoID == 0 {
+		return nil
+	}
+	bucket := now.UTC().Format("2006010215")
+	key := fmt.Sprintf("%s%s:%d:%s", exposureDedupeKeyPrefix, viewerKey, videoID, bucket)
+	redisCtx, cancel := config.WithRedisTimeout(ctx)
+	defer cancel()
+	return client.Set(redisCtx, key, "1", exposureDedupeBucketTTL).Err()
+}
+
+func recordRecentExposure(ctx context.Context, viewerKey string, videoID uint, now time.Time) {
 	client := config.GetRedisClient()
 	if client == nil || viewerKey == "" || videoID == 0 {
 		return
@@ -238,11 +287,13 @@ func recordRecentExposure(viewerKey string, videoID uint, now time.Time) {
 	key := recentExposureKeyPrefix + viewerKey
 	member := strconv.FormatUint(uint64(videoID), 10)
 	score := float64(now.Unix())
+	redisCtx, cancel := config.WithRedisTimeout(ctx)
+	defer cancel()
 	pipe := client.Pipeline()
-	pipe.ZAdd(config.Ctx, key, &redis.Z{Score: score, Member: member})
-	pipe.ZRemRangeByScore(config.Ctx, key, "-inf", strconv.FormatInt(now.Add(-recentExposureLookback).Unix(), 10))
-	pipe.Expire(config.Ctx, key, recentExposureSetTTL)
-	_, _ = pipe.Exec(config.Ctx)
+	pipe.ZAdd(redisCtx, key, &redis.Z{Score: score, Member: member})
+	pipe.ZRemRangeByScore(redisCtx, key, "-inf", strconv.FormatInt(now.Add(-recentExposureLookback).Unix(), 10))
+	pipe.Expire(redisCtx, key, recentExposureSetTTL)
+	_, _ = pipe.Exec(redisCtx)
 }
 
 func getRecentExposureSet(viewerKey string, limit int) (map[uint]struct{}, error) {
@@ -255,7 +306,9 @@ func getRecentExposureSet(viewerKey string, limit int) (map[uint]struct{}, error
 	}
 	key := recentExposureKeyPrefix + viewerKey
 	minScore := strconv.FormatInt(time.Now().Add(-recentExposureLookback).Unix(), 10)
-	rows, err := client.ZRevRangeByScore(config.Ctx, key, &redis.ZRangeBy{
+	redisCtx, cancel := config.WithRedisTimeout(context.Background())
+	defer cancel()
+	rows, err := client.ZRevRangeByScore(redisCtx, key, &redis.ZRangeBy{
 		Max:   "+inf",
 		Min:   minScore,
 		Count: int64(limit),
@@ -316,4 +369,18 @@ func derefUint(v *uint) uint {
 		return 0
 	}
 	return *v
+}
+
+func finalizeAcceptedVideoEvent(ctx context.Context, requestID, eventType, viewerKey string, videoID uint, now time.Time) error {
+	if err := recordBehaviorRequest(ctx, requestID); err != nil {
+		return err
+	}
+	if eventType != EventExposure {
+		return nil
+	}
+	if err := recordUniqueExposure(ctx, viewerKey, videoID, now); err != nil {
+		return err
+	}
+	recordRecentExposure(ctx, viewerKey, videoID, now)
+	return nil
 }

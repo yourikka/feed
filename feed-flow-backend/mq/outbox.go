@@ -146,6 +146,7 @@ func publishClaimedOutboxRecord(record model.MQOutboxMessage) error {
 	}
 
 	err = PublishMessage(
+		context.Background(),
 		record.Exchange,
 		record.RoutingKey,
 		amqp091.Publishing{

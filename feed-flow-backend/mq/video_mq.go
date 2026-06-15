@@ -21,15 +21,14 @@ const (
 )
 
 var publisherState = struct {
-	mu        sync.Mutex
-	conn      *amqp091.Connection
-	ch        *amqp091.Channel
-	confirmCh <-chan amqp091.Confirmation
+	mu   sync.Mutex
+	conn *amqp091.Connection
+	ch   *amqp091.Channel
 }{}
 
 // PublishVideo 发送消息：视频发布成功后异步通知
 func PublishVideo(videoID uint) {
-	err := PublishMessage("", config.VideoPublishQueue, buildVideoPublishPublishing(videoID))
+	err := PublishMessage(context.Background(), "", config.VideoPublishQueue, buildVideoPublishPublishing(videoID))
 	if err != nil {
 		log.Println("mq发送消息失败:", err)
 		if syncErr := processVideoPublish(int(videoID)); syncErr != nil {
@@ -157,7 +156,7 @@ func processVideoPublish(videoID int) error {
 	}
 
 	log.Println("收到mq消息,处理视频发布:", videoID)
-	ranking.RecordHotEvent(uint(videoID), ranking.ScorePublish)
+	ranking.RecordHotEvent(context.Background(), uint(videoID), ranking.ScorePublish)
 	return nil
 }
 
@@ -223,6 +222,7 @@ func publishToRetryQueue(msg amqp091.Delivery, retryCount int, cause error) erro
 	headers["x-last-error"] = cause.Error()
 
 	return PublishMessage(
+		context.Background(),
 		"",
 		config.VideoPublishRetryQueue,
 		amqp091.Publishing{
@@ -245,6 +245,7 @@ func publishToDLQ(msg amqp091.Delivery, retryCount int, cause error) error {
 	headers["x-final-error"] = cause.Error()
 
 	return PublishMessage(
+		context.Background(),
 		config.VideoPublishDLX,
 		config.VideoPublishDLQRoutingKey,
 		amqp091.Publishing{
@@ -261,49 +262,52 @@ func publishToDLQ(msg amqp091.Delivery, retryCount int, cause error) error {
 	)
 }
 
-func PublishMessage(exchange, routingKey string, publishing amqp091.Publishing) error {
+func PublishMessage(ctx context.Context, exchange, routingKey string, publishing amqp091.Publishing) error {
 	conn := config.GetRabbitConn()
 	if conn == nil || conn.IsClosed() {
 		return errors.New("rabbitmq unavailable")
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	publisherState.mu.Lock()
-	defer publisherState.mu.Unlock()
-
 	if err := ensurePublisherReady(conn); err != nil {
+		publisherState.mu.Unlock()
 		return err
 	}
 	ch := publisherState.ch
-	confirmChan := publisherState.confirmCh
+	publisherState.mu.Unlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), publishTimeout)
+	publishCtx, cancel := context.WithTimeout(ctx, publishTimeout)
 	defer cancel()
 
-	if err := ch.PublishWithContext(
-		ctx,
+	deferredConfirm, err := ch.PublishWithDeferredConfirmWithContext(
+		publishCtx,
 		exchange,
 		routingKey,
 		false,
 		false,
 		publishing,
-	); err != nil {
+	)
+	if err != nil {
+		publisherState.mu.Lock()
 		closePublisherChannel()
+		publisherState.mu.Unlock()
 		return err
 	}
-
-	select {
-	case confirm, ok := <-confirmChan:
-		if !ok {
-			closePublisherChannel()
-			return errors.New("publisher confirm channel closed")
-		}
-		if !confirm.Ack {
-			return errors.New("publisher nack received")
-		}
+	if deferredConfirm == nil {
 		return nil
-	case <-ctx.Done():
-		return fmt.Errorf("publisher confirm timeout: %w", ctx.Err())
 	}
+
+	acked, err := deferredConfirm.WaitContext(publishCtx)
+	if err != nil {
+		return fmt.Errorf("publisher confirm timeout: %w", err)
+	}
+	if !acked {
+		return errors.New("publisher nack received")
+	}
+	return nil
 }
 
 func ensurePublisherReady(conn *amqp091.Connection) error {
@@ -323,7 +327,6 @@ func ensurePublisherReady(conn *amqp091.Connection) error {
 
 	publisherState.conn = conn
 	publisherState.ch = ch
-	publisherState.confirmCh = ch.NotifyPublish(make(chan amqp091.Confirmation, 256))
 	return nil
 }
 
@@ -333,7 +336,6 @@ func closePublisherChannel() {
 	}
 	publisherState.conn = nil
 	publisherState.ch = nil
-	publisherState.confirmCh = nil
 }
 
 func CloneHeaders(headers amqp091.Table) amqp091.Table {

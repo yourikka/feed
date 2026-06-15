@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"time"
@@ -34,13 +35,13 @@ func isDuplicateEntry(err error) bool {
 }
 
 // 点赞/取消点赞
-func LikeVideo(videoId, userId uint) (bool, error) {
-	return toggleVideoInteraction(interactionKindLike, videoId, userId)
+func LikeVideo(ctx context.Context, videoId, userId uint) (bool, error) {
+	return toggleVideoInteraction(ctx, interactionKindLike, videoId, userId)
 }
 
 // 收藏/取消收藏
-func FavoriteVideo(videoId, userId uint) (bool, error) {
-	return toggleVideoInteraction(interactionKindFavorite, videoId, userId)
+func FavoriteVideo(ctx context.Context, videoId, userId uint) (bool, error) {
+	return toggleVideoInteraction(ctx, interactionKindFavorite, videoId, userId)
 }
 
 // 关注/取消关注
@@ -80,9 +81,9 @@ func CommentVideo(videoId, userId uint, content string) error {
 		Content: content,
 	}).Error
 	if err == nil {
-		adjustVideoStatsCache(videoId, videoStatsCommentField, 1)
+		adjustVideoStatsCache(context.Background(), videoId, videoStatsCommentField, 1)
 		invalidateFeedVideoCacheForVideo(videoId)
-		ranking.RecordHotEvent(videoId, ranking.ScoreComment)
+		ranking.RecordHotEvent(context.Background(), videoId, ranking.ScoreComment)
 	}
 	return err
 }
@@ -144,13 +145,13 @@ func DeleteComment(commentID, operatorID uint) error {
 	if err := config.DB.Delete(&model.Comment{}, commentID).Error; err != nil {
 		return err
 	}
-	adjustVideoStatsCache(comment.VideoID, videoStatsCommentField, -1)
+	adjustVideoStatsCache(context.Background(), comment.VideoID, videoStatsCommentField, -1)
 	invalidateFeedVideoCacheForVideo(comment.VideoID)
-	ranking.RecordHotEvent(comment.VideoID, -ranking.ScoreComment)
+	ranking.RecordHotEvent(context.Background(), comment.VideoID, -ranking.ScoreComment)
 	return nil
 }
 
-func toggleVideoInteraction(kind interactionKind, videoID, userID uint) (bool, error) {
+func toggleVideoInteraction(ctx context.Context, kind interactionKind, videoID, userID uint) (bool, error) {
 	currentState, currentVersion, err := getInteractionState(kind, userID, videoID)
 	if err != nil {
 		return false, err
@@ -158,16 +159,6 @@ func toggleVideoInteraction(kind interactionKind, videoID, userID uint) (bool, e
 
 	nextState := !currentState
 	nextVersion := currentVersion + time.Now().UnixNano()
-	setInteractionStateCache(kind, userID, videoID, nextState, nextVersion)
-
-	switch kind {
-	case interactionKindLike:
-		applyInteractionSideEffects(videoID, nextState, videoStatsLikeField, ranking.ScoreLike)
-	case interactionKindFavorite:
-		applyInteractionSideEffects(videoID, nextState, videoStatsFavoriteField, ranking.ScoreFavorite)
-	default:
-		return false, errors.New("不支持的交互类型")
-	}
 
 	cmd := interactionCommand{
 		Kind:         kind,
@@ -184,17 +175,28 @@ func toggleVideoInteraction(kind interactionKind, videoID, userID uint) (bool, e
 		}
 	}
 
+	setInteractionStateCache(ctx, kind, userID, videoID, nextState, nextVersion)
+
+	switch kind {
+	case interactionKindLike:
+		applyInteractionSideEffects(ctx, videoID, nextState, videoStatsLikeField, ranking.ScoreLike)
+	case interactionKindFavorite:
+		applyInteractionSideEffects(ctx, videoID, nextState, videoStatsFavoriteField, ranking.ScoreFavorite)
+	default:
+		return false, errors.New("不支持的交互类型")
+	}
+
 	return nextState, nil
 }
 
-func applyInteractionSideEffects(videoID uint, active bool, statsField string, scoreDelta float64) {
+func applyInteractionSideEffects(ctx context.Context, videoID uint, active bool, statsField string, scoreDelta float64) {
 	delta := int64(-1)
 	score := -scoreDelta
 	if active {
 		delta = 1
 		score = scoreDelta
 	}
-	adjustVideoStatsCache(videoID, statsField, delta)
+	adjustVideoStatsCache(ctx, videoID, statsField, delta)
 	invalidateFeedVideoCacheForVideo(videoID)
-	ranking.RecordHotEvent(videoID, score)
+	ranking.RecordHotEvent(ctx, videoID, score)
 }

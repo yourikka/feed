@@ -12,6 +12,7 @@ import (
 	"github.com/yourikka/feed-flow/model"
 	"github.com/yourikka/feed-flow/mq"
 	"github.com/yourikka/feed-flow/ranking"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -22,6 +23,7 @@ const (
 )
 
 type queuedVideoEvent struct {
+	EventID    string `json:"event_id"`
 	UserID     uint   `json:"user_id"`
 	ViewerKey  string `json:"viewer_key"`
 	VideoID    uint   `json:"video_id"`
@@ -34,6 +36,10 @@ type queuedVideoEvent struct {
 }
 
 func enqueueVideoEvent(event queuedVideoEvent) bool {
+	return enqueueVideoEventWithContext(context.Background(), event)
+}
+
+func enqueueVideoEventWithContext(ctx context.Context, event queuedVideoEvent) bool {
 	payload, err := json.Marshal(event)
 	if err != nil {
 		return false
@@ -42,6 +48,7 @@ func enqueueVideoEvent(event queuedVideoEvent) bool {
 		"x-event-type": event.EventType,
 	}
 	err = mq.PublishMessage(
+		ctx,
 		"",
 		config.BehaviorEventQueue,
 		amqp091.Publishing{
@@ -158,7 +165,6 @@ func flushBehaviorBatch(batch []behaviorPendingMessage) {
 			continue
 		}
 		if _, ok := existingVideoIDs[item.event.VideoID]; !ok {
-			// 非法或已删除视频事件直接丢弃并 ack。
 			_ = item.msg.Ack(false)
 			continue
 		}
@@ -166,17 +172,40 @@ func flushBehaviorBatch(batch []behaviorPendingMessage) {
 		accepted = append(accepted, item)
 	}
 
+	insertedEventIDs := map[string]struct{}{}
 	if len(models) > 0 {
-		if err := config.DB.CreateInBatches(models, behaviorEventInsertBatchSz).Error; err != nil {
+		existingBeforeInsert, err := loadBehaviorEventIDSetFromEvents(accepted)
+		if err != nil {
 			for _, item := range accepted {
 				handleBehaviorConsumeFailure(item.msg, item.retryCount, err)
 			}
 			return
 		}
+		if err := config.DB.Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(models, behaviorEventInsertBatchSz).Error; err != nil {
+			for _, item := range accepted {
+				handleBehaviorConsumeFailure(item.msg, item.retryCount, err)
+			}
+			return
+		}
+		for _, item := range accepted {
+			eventID := buildBehaviorEventID(item.event)
+			if eventID == "" {
+				continue
+			}
+			if _, existed := existingBeforeInsert[eventID]; existed {
+				continue
+			}
+			insertedEventIDs[eventID] = struct{}{}
+		}
 	}
 
 	for _, item := range accepted {
+		if !shouldScoreBehaviorEvent(item.event, insertedEventIDs) {
+			_ = item.msg.Ack(false)
+			continue
+		}
 		ranking.RecordHotEvent(
+			context.Background(),
 			item.event.VideoID,
 			scoreDeltaForEvent(item.event.EventType, item.event.ProgressMs, item.event.DurationMs, item.event.PositionMs),
 		)
@@ -226,6 +255,7 @@ func loadExistingVideoIDSet(videoIDs []uint) (map[uint]struct{}, error) {
 
 func toBehaviorModel(event queuedVideoEvent) model.VideoBehaviorEvent {
 	return model.VideoBehaviorEvent{
+		EventID:    buildBehaviorEventID(event),
 		UserID:     event.UserID,
 		ViewerKey:  strings.TrimSpace(event.ViewerKey),
 		VideoID:    event.VideoID,
@@ -263,6 +293,7 @@ func publishBehaviorRetryMessage(msg amqp091.Delivery, retryCount int, cause err
 	headers["x-retry-count"] = retryCount
 	headers["x-last-error"] = cause.Error()
 	return mq.PublishMessage(
+		context.Background(),
 		"",
 		config.BehaviorEventRetryQueue,
 		amqp091.Publishing{
@@ -284,6 +315,7 @@ func publishBehaviorDLQMessage(msg amqp091.Delivery, retryCount int, cause error
 	headers["x-retry-count"] = retryCount
 	headers["x-final-error"] = cause.Error()
 	return mq.PublishMessage(
+		context.Background(),
 		config.BehaviorEventDLX,
 		config.BehaviorEventDLQRoutingKey,
 		amqp091.Publishing{
@@ -306,4 +338,62 @@ func uintPtr(v uint) *uint {
 	}
 	value := v
 	return &value
+}
+
+func loadBehaviorEventIDSetFromEvents(events []behaviorPendingMessage) (map[string]struct{}, error) {
+	eventIDs := make([]string, 0, len(events))
+	for _, item := range events {
+		eventID := buildBehaviorEventID(item.event)
+		if eventID == "" {
+			continue
+		}
+		eventIDs = append(eventIDs, eventID)
+	}
+	result := make(map[string]struct{}, len(eventIDs))
+	if len(eventIDs) == 0 {
+		return result, nil
+	}
+	var rows []string
+	if err := config.DB.Model(&model.VideoBehaviorEvent{}).
+		Where("event_id IN ?", eventIDs).
+		Pluck("event_id", &rows).Error; err != nil {
+		return nil, err
+	}
+	for _, eventID := range rows {
+		eventID = strings.TrimSpace(eventID)
+		if eventID == "" {
+			continue
+		}
+		result[eventID] = struct{}{}
+	}
+	return result, nil
+}
+
+func shouldScoreBehaviorEvent(event queuedVideoEvent, insertedEventIDs map[string]struct{}) bool {
+	eventID := buildBehaviorEventID(event)
+	if eventID == "" {
+		return true
+	}
+	_, ok := insertedEventIDs[eventID]
+	return ok
+}
+
+func buildBehaviorEventID(event queuedVideoEvent) string {
+	if trimmed := strings.TrimSpace(event.EventID); trimmed != "" {
+		return trimmed
+	}
+	requestID := strings.TrimSpace(event.RequestID)
+	if requestID != "" {
+		return "req:" + requestID
+	}
+	return fmt.Sprintf(
+		"evt:%d:%s:%d:%s:%d:%d:%d",
+		event.UserID,
+		strings.TrimSpace(event.ViewerKey),
+		event.VideoID,
+		strings.TrimSpace(strings.ToLower(event.EventType)),
+		event.ProgressMs,
+		event.DurationMs,
+		event.PositionMs,
+	)
 }

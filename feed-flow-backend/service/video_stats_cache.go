@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"math/rand"
 	"sort"
@@ -169,21 +170,23 @@ func setVideoStatsCache(videoID uint, stats videoStats) {
 	_ = client.Expire(config.Ctx, key, getVideoStatsCacheTTL()).Err()
 }
 
-func adjustVideoStatsCache(videoID uint, field string, delta int64) {
+func adjustVideoStatsCache(ctx context.Context, videoID uint, field string, delta int64) {
 	client := config.GetRedisClient()
 	if client == nil || videoID == 0 || delta == 0 {
 		return
 	}
+	redisCtx, cancel := config.WithRedisTimeout(ctx)
+	defer cancel()
 
 	key := videoStatsCacheKey(videoID)
-	newVal, err := client.HIncrBy(config.Ctx, key, field, delta).Result()
+	newVal, err := client.HIncrBy(redisCtx, key, field, delta).Result()
 	if err != nil {
 		return
 	}
 	if newVal < 0 {
-		_ = client.HSet(config.Ctx, key, field, 0).Err()
+		_ = client.HSet(redisCtx, key, field, 0).Err()
 	}
-	_ = client.Expire(config.Ctx, key, getVideoStatsCacheTTL()).Err()
+	_ = client.Expire(redisCtx, key, getVideoStatsCacheTTL()).Err()
 }
 
 func invalidateVideoStatsCache(videoID uint) {

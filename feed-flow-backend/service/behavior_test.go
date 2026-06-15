@@ -1,6 +1,10 @@
 package service
 
-import "testing"
+import (
+	"context"
+	"testing"
+	"time"
+)
 
 func TestBuildViewerKey(t *testing.T) {
 	t.Run("prefer user id", func(t *testing.T) {
@@ -48,5 +52,40 @@ func TestScoreDeltaForEvent(t *testing.T) {
 				t.Fatalf("scoreDeltaForEvent(%q) = %v, want %v", tt.eventType, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestFinalizeAcceptedVideoEventNoopWithoutRedis(t *testing.T) {
+	t.Parallel()
+
+	if err := finalizeAcceptedVideoEvent(context.Background(), "req-1", EventExposure, "u:1", 42, time.Now()); err != nil {
+		t.Fatalf("finalizeAcceptedVideoEvent() error = %v", err)
+	}
+}
+
+func TestBuildBehaviorEventID(t *testing.T) {
+	t.Parallel()
+
+	reqEvent := queuedVideoEvent{
+		RequestID: "req-42",
+		ViewerKey: "u:1",
+		VideoID:   9,
+		EventType: EventPlayStart,
+	}
+	if got := buildBehaviorEventID(reqEvent); got != "req:req-42" {
+		t.Fatalf("buildBehaviorEventID(request) = %q", got)
+	}
+
+	noReqEvent := queuedVideoEvent{
+		UserID:     7,
+		ViewerKey:  "u:7",
+		VideoID:    9,
+		EventType:  EventProgress,
+		ProgressMs: 1000,
+		DurationMs: 5000,
+		PositionMs: 1000,
+	}
+	if got := buildBehaviorEventID(noReqEvent); got == "" {
+		t.Fatal("buildBehaviorEventID(without request id) should not be empty")
 	}
 }

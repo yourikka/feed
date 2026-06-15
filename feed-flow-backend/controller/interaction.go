@@ -17,7 +17,7 @@ func LikeVideo(c *gin.Context) {
 		return
 	}
 
-	liked, err := service.LikeVideo(videoID, uid)
+	liked, err := service.LikeVideo(c.Request.Context(), videoID, uid)
 	if err != nil {
 		respondError(c, "点赞失败", nil)
 		return
@@ -34,7 +34,7 @@ func FavoriteVideo(c *gin.Context) {
 		return
 	}
 
-	favorited, err := service.FavoriteVideo(videoID, uid)
+	favorited, err := service.FavoriteVideo(c.Request.Context(), videoID, uid)
 	if err != nil {
 		respondError(c, "收藏失败", nil)
 		return

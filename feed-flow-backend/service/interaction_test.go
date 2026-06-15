@@ -58,3 +58,14 @@ func TestParseInteractionCacheValue(t *testing.T) {
 		})
 	}
 }
+
+func TestFormatInteractionCacheValue(t *testing.T) {
+	t.Parallel()
+
+	if got := formatInteractionCacheValue(true, 12); got != "1:12" {
+		t.Fatalf("formatInteractionCacheValue(true, 12) = %q", got)
+	}
+	if got := formatInteractionCacheValue(false, 0); got != "0:0" {
+		t.Fatalf("formatInteractionCacheValue(false, 0) = %q", got)
+	}
+}

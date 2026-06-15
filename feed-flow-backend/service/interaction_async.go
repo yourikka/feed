@@ -128,7 +128,7 @@ func publishInteractionCommandTx(tx *gorm.DB, cmd interactionCommand) error {
 	if tx != nil {
 		return mq.SaveOutboxMessage(tx, message)
 	}
-	return mq.PublishMessage(message.Exchange, message.RoutingKey, message.Publishing)
+	return mq.PublishMessage(context.Background(), message.Exchange, message.RoutingKey, message.Publishing)
 }
 
 func handleInteractionMessage(msg amqp091.Delivery) {
@@ -207,6 +207,7 @@ func publishInteractionRetry(msg amqp091.Delivery, retryCount int, cause error) 
 	headers["x-last-error"] = cause.Error()
 
 	return mq.PublishMessage(
+		context.Background(),
 		"",
 		config.InteractionEventRetryQueue,
 		amqp091.Publishing{
@@ -229,6 +230,7 @@ func publishInteractionDLQ(msg amqp091.Delivery, retryCount int, cause error) er
 	headers["x-final-error"] = cause.Error()
 
 	return mq.PublishMessage(
+		context.Background(),
 		config.InteractionEventDLX,
 		config.InteractionEventDLQRoutingKey,
 		amqp091.Publishing{
@@ -323,13 +325,15 @@ func formatInteractionCacheValue(active bool, version int64) string {
 	return fmt.Sprintf("%s:%d", state, version)
 }
 
-func setInteractionStateCache(kind interactionKind, userID, videoID uint, active bool, version int64) {
+func setInteractionStateCache(ctx context.Context, kind interactionKind, userID, videoID uint, active bool, version int64) {
 	client := config.GetRedisClient()
 	if client == nil || userID == 0 || videoID == 0 {
 		return
 	}
+	redisCtx, cancel := config.WithRedisTimeout(ctx)
+	defer cancel()
 	_ = client.Set(
-		config.Ctx,
+		redisCtx,
 		interactionCacheKey(kind, userID, videoID),
 		formatInteractionCacheValue(active, version),
 		interactionStateTTL,
@@ -341,7 +345,9 @@ func getInteractionStateFromCache(kind interactionKind, userID, videoID uint) (b
 	if client == nil || userID == 0 || videoID == 0 {
 		return false, 0, false
 	}
-	raw, err := client.Get(config.Ctx, interactionCacheKey(kind, userID, videoID)).Result()
+	redisCtx, cancel := config.WithRedisTimeout(context.Background())
+	defer cancel()
+	raw, err := client.Get(redisCtx, interactionCacheKey(kind, userID, videoID)).Result()
 	if err != nil || raw == "" {
 		return false, 0, false
 	}
@@ -353,7 +359,9 @@ func isInteractionCommandStale(cmd interactionCommand) (bool, error) {
 	if client == nil {
 		return false, nil
 	}
-	raw, err := client.Get(config.Ctx, interactionCacheKey(cmd.Kind, cmd.UserID, cmd.VideoID)).Result()
+	redisCtx, cancel := config.WithRedisTimeout(context.Background())
+	defer cancel()
+	raw, err := client.Get(redisCtx, interactionCacheKey(cmd.Kind, cmd.UserID, cmd.VideoID)).Result()
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
 			return false, nil
@@ -402,7 +410,7 @@ func getInteractionState(kind interactionKind, userID, videoID uint) (bool, int6
 	if err != nil {
 		return false, 0, err
 	}
-	setInteractionStateCache(kind, userID, videoID, state, 0)
+	setInteractionStateCache(context.Background(), kind, userID, videoID, state, 0)
 	return state, 0, nil
 }
 
@@ -426,7 +434,9 @@ func getInteractionStatesBatch(kind interactionKind, userID uint, videoIDs []uin
 			keyToVideoID[key] = videoID
 		}
 
-		values, err := client.MGet(config.Ctx, keys...).Result()
+		redisCtx, cancel := config.WithRedisTimeout(context.Background())
+		values, err := client.MGet(redisCtx, keys...).Result()
+		cancel()
 		if err == nil && len(values) == len(keys) {
 			for i, value := range values {
 				videoID := keyToVideoID[keys[i]]
@@ -481,7 +491,7 @@ func getInteractionStatesBatch(kind interactionKind, userID uint, videoIDs []uin
 	for _, videoID := range missIDs {
 		active := stateMap[videoID]
 		result[videoID] = active
-		setInteractionStateCache(kind, userID, videoID, active, 0)
+		setInteractionStateCache(context.Background(), kind, userID, videoID, active, 0)
 	}
 
 	return result, nil

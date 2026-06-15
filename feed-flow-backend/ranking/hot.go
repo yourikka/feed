@@ -1,6 +1,7 @@
 package ranking
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -21,19 +22,21 @@ const (
 	hotAggTTL       = 30 * time.Second
 )
 
-func RecordHotEvent(videoID uint, delta float64) {
+func RecordHotEvent(ctx context.Context, videoID uint, delta float64) {
 	client := config.GetRedisClient()
 	if videoID == 0 || delta == 0 || client == nil {
 		return
 	}
+	redisCtx, cancel := config.WithRedisTimeout(ctx)
+	defer cancel()
 
 	member := strconv.FormatUint(uint64(videoID), 10)
 	bucketKey := currentBucketKey()
 
 	pipe := client.Pipeline()
-	pipe.ZIncrBy(config.Ctx, bucketKey, delta, member)
-	pipe.Expire(config.Ctx, bucketKey, getBucketTTL())
-	if _, err := pipe.Exec(config.Ctx); err != nil {
+	pipe.ZIncrBy(redisCtx, bucketKey, delta, member)
+	pipe.Expire(redisCtx, bucketKey, getBucketTTL())
+	if _, err := pipe.Exec(redisCtx); err != nil {
 		log.Printf("record hot event failed: %v", err)
 	}
 }

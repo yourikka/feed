@@ -61,12 +61,11 @@ func TestClosePublisherChannelResetsState(t *testing.T) {
 	publisherState.mu.Lock()
 	publisherState.conn = nil
 	publisherState.ch = nil
-	publisherState.confirmCh = make(chan amqp091.Confirmation, 1)
 	publisherState.mu.Unlock()
 
 	publisherState.mu.Lock()
 	closePublisherChannel()
-	isNil := publisherState.conn == nil && publisherState.ch == nil && publisherState.confirmCh == nil
+	isNil := publisherState.conn == nil && publisherState.ch == nil
 	publisherState.mu.Unlock()
 
 	if !isNil {

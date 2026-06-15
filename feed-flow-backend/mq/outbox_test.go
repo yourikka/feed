@@ -60,3 +60,9 @@ func TestBuildVideoPublishMessageID(t *testing.T) {
 		t.Fatalf("buildVideoPublishMessageID() = %q", got)
 	}
 }
+
+func TestCloneHeadersNil(t *testing.T) {
+	if got := CloneHeaders(nil); len(got) != 0 {
+		t.Fatalf("CloneHeaders(nil) length = %d, want 0", len(got))
+	}
+}

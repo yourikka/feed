@@ -13,9 +13,13 @@ var (
 	redisMu sync.RWMutex
 	RDB     *redis.Client
 )
+
 var Ctx = context.Background()
 
-const redisReconnectInterval = 5 * time.Second
+const (
+	redisReconnectInterval = 5 * time.Second
+	redisOpTimeout         = 2 * time.Second
+)
 
 func InitRedis() {
 	if err := connectRedis(); err != nil {
@@ -26,11 +30,18 @@ func InitRedis() {
 
 func connectRedis() error {
 	client := redis.NewClient(&redis.Options{
-		Addr:     getEnv("REDIS_ADDR", "redis:6379"),
-		Password: getEnv("REDIS_PASSWORD", ""),
-		DB:       0,
+		Addr:         getEnv("REDIS_ADDR", "redis:6379"),
+		Password:     getEnv("REDIS_PASSWORD", ""),
+		DB:           0,
+		DialTimeout:  redisOpTimeout,
+		ReadTimeout:  redisOpTimeout,
+		WriteTimeout: redisOpTimeout,
+		PoolTimeout:  redisOpTimeout,
 	})
-	_, err := client.Ping(Ctx).Result()
+	ctx, cancel := WithRedisTimeout(context.Background())
+	defer cancel()
+
+	_, err := client.Ping(ctx).Result()
 	if err != nil {
 		_ = client.Close()
 		return err
@@ -48,8 +59,13 @@ func GetRedisClient() *redis.Client {
 
 func setRedisClient(client *redis.Client) {
 	redisMu.Lock()
+	oldClient := RDB
 	RDB = client
 	redisMu.Unlock()
+
+	if oldClient != nil && oldClient != client {
+		_ = oldClient.Close()
+	}
 }
 
 func keepRedisAlive() {
@@ -59,7 +75,10 @@ func keepRedisAlive() {
 	for range ticker.C {
 		client := GetRedisClient()
 		if client != nil {
-			if _, err := client.Ping(Ctx).Result(); err == nil {
+			ctx, cancel := WithRedisTimeout(context.Background())
+			_, err := client.Ping(ctx).Result()
+			cancel()
+			if err == nil {
 				continue
 			}
 			log.Println("Redis ping failed, try reconnect")
@@ -71,4 +90,11 @@ func keepRedisAlive() {
 		}
 		log.Println("Redis self-heal succeeded")
 	}
+}
+
+func WithRedisTimeout(parent context.Context) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	return context.WithTimeout(parent, redisOpTimeout)
 }
