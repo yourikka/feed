@@ -380,6 +380,13 @@ func decodeFeedCursor(raw string) (FeedCursor, bool) {
 	return cursor, true
 }
 
+func resolveHotCursorToken(raw string, cursor FeedCursor) string {
+	if cursor.HotToken != "" {
+		return cursor.HotToken
+	}
+	return strings.TrimSpace(raw)
+}
+
 func getLatestVideoFeed(userID *uint, viewerKey string, cursor uint, limit int, filterSeen bool) ([]FeedVideo, string, bool, error) {
 	videoIDs, nextToken, hasMore, err := getLatestVideoIDsPage(viewerKey, cursor, 0, limit, filterSeen)
 	if err != nil {
@@ -706,20 +713,20 @@ func getHotVideoIDsPage(viewerKey string, cursorToken string, legacyCursor uint,
 		return []uint{}, "", false, nil
 	}
 
+	candidateIDs := videoIDs
 	if filterSeen {
 		videoIDs, err = FilterRecentlyExposedVideoIDs(viewerKey, videoIDs)
 		if err != nil {
 			return nil, "", false, err
 		}
 	}
-	if len(videoIDs) > limit {
-		videoIDs = videoIDs[:limit]
-	}
-	if len(videoIDs) == 0 {
-		return []uint{}, "", false, nil
+	selectedIDs, nextOffset, hasMore := selectHotVideoIDsPage(candidateIDs, videoIDs, offset, limit, total)
+	if len(selectedIDs) == 0 {
+		nextCursor := encodeNextHotCursor(snapshot, nextOffset, hasMore)
+		return []uint{}, nextCursor, hasMore, nil
 	}
 
-	videos, err := getVideosByIDsOrdered(videoIDs)
+	videos, err := getVideosByIDsOrdered(selectedIDs)
 	if err != nil {
 		return nil, "", false, err
 	}
@@ -727,18 +734,53 @@ func getHotVideoIDsPage(viewerKey string, cursorToken string, legacyCursor uint,
 		return []uint{}, "", false, nil
 	}
 
-	next := offset + len(videoIDs)
-	hasMore := int64(next) < total
-	nextCursor := ""
-	if hasMore {
-		nextCursor = ranking.EncodeHotSnapshotCursor(ranking.HotSnapshotCursor{
-			AggKey:  snapshot.AggKey,
-			Offset:  next,
-			Window:  snapshot.Window,
-			Created: snapshot.Created,
-		})
+	nextCursor := encodeNextHotCursor(snapshot, nextOffset, hasMore)
+	return modelVideosToIDs(videos), nextCursor, hasMore, nil
+}
+
+func selectHotVideoIDsPage(candidateIDs, visibleIDs []uint, offset, limit int, total int64) ([]uint, int, bool) {
+	if limit <= 0 || len(candidateIDs) == 0 {
+		return []uint{}, offset, false
 	}
-	return videoIDs, nextCursor, hasMore, nil
+
+	selectedIDs := visibleIDs
+	if len(selectedIDs) > limit {
+		selectedIDs = selectedIDs[:limit]
+	}
+
+	consumedCount := consumedHotCandidateCount(candidateIDs, selectedIDs)
+	nextOffset := offset + consumedCount
+	hasMore := int64(nextOffset) < total
+	return selectedIDs, nextOffset, hasMore
+}
+
+func consumedHotCandidateCount(candidateIDs, selectedIDs []uint) int {
+	if len(candidateIDs) == 0 {
+		return 0
+	}
+	if len(selectedIDs) == 0 {
+		return len(candidateIDs)
+	}
+
+	lastSelectedID := selectedIDs[len(selectedIDs)-1]
+	for i, videoID := range candidateIDs {
+		if videoID == lastSelectedID {
+			return i + 1
+		}
+	}
+	return len(candidateIDs)
+}
+
+func encodeNextHotCursor(snapshot ranking.HotSnapshotCursor, nextOffset int, hasMore bool) string {
+	if !hasMore {
+		return ""
+	}
+	return ranking.EncodeHotSnapshotCursor(ranking.HotSnapshotCursor{
+		AggKey:  snapshot.AggKey,
+		Offset:  nextOffset,
+		Window:  snapshot.Window,
+		Created: snapshot.Created,
+	})
 }
 
 // GetVideoFeed 获取视频流数据和交互状态
@@ -779,10 +821,7 @@ func GetVideoFeedByQuery(query FeedQuery) ([]FeedVideo, string, bool, error) {
 		}
 		return getLatestVideoFeed(query.UserID, viewerKey, currentCursor, limit, query.FilterSeen)
 	case "hot":
-		hotToken := cursor.HotToken
-		if hotToken == "" {
-			hotToken = query.Cursor
-		}
+		hotToken := resolveHotCursorToken(query.Cursor, cursor)
 		videos, next, more, err := getHotVideoFeed(query.UserID, viewerKey, hotToken, query.LegacyID, limit, query.FilterSeen)
 		if err != nil {
 			// 热榜依赖 Redis，异常时自动降级回最新流。

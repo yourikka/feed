@@ -3,12 +3,16 @@ package config
 import (
 	"context"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/go-redis/redis/v8"
 )
 
-var RDB *redis.Client
+var (
+	redisMu sync.RWMutex
+	RDB     *redis.Client
+)
 var Ctx = context.Background()
 
 const redisReconnectInterval = 5 * time.Second
@@ -31,9 +35,21 @@ func connectRedis() error {
 		_ = client.Close()
 		return err
 	}
-	RDB = client
+	setRedisClient(client)
 	log.Println("Connected to Redis successfully")
 	return nil
+}
+
+func GetRedisClient() *redis.Client {
+	redisMu.RLock()
+	defer redisMu.RUnlock()
+	return RDB
+}
+
+func setRedisClient(client *redis.Client) {
+	redisMu.Lock()
+	RDB = client
+	redisMu.Unlock()
 }
 
 func keepRedisAlive() {
@@ -41,8 +57,9 @@ func keepRedisAlive() {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		if RDB != nil {
-			if _, err := RDB.Ping(Ctx).Result(); err == nil {
+		client := GetRedisClient()
+		if client != nil {
+			if _, err := client.Ping(Ctx).Result(); err == nil {
 				continue
 			}
 			log.Println("Redis ping failed, try reconnect")

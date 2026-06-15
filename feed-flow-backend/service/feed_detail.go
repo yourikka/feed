@@ -20,7 +20,8 @@ func GetFeedVideoIDs(query FeedQuery) (FeedIDPage, error) {
 	sortType := normalizeSortType(query.SortType)
 	switch sortType {
 	case "hot":
-		videoIDs, nextToken, hasMore, err := getHotVideoIDsPage(viewerKey, cursor.HotToken, query.LegacyID, limit, query.FilterSeen)
+		hotToken := resolveHotCursorToken(query.Cursor, cursor)
+		videoIDs, nextToken, hasMore, err := getHotVideoIDsPage(viewerKey, hotToken, query.LegacyID, limit, query.FilterSeen)
 		if err != nil {
 			return FeedIDPage{}, err
 		}

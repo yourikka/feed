@@ -316,10 +316,11 @@ func formatInteractionCacheValue(active bool, version int64) string {
 }
 
 func setInteractionStateCache(kind interactionKind, userID, videoID uint, active bool, version int64) {
-	if config.RDB == nil || userID == 0 || videoID == 0 {
+	client := config.GetRedisClient()
+	if client == nil || userID == 0 || videoID == 0 {
 		return
 	}
-	_ = config.RDB.Set(
+	_ = client.Set(
 		config.Ctx,
 		interactionCacheKey(kind, userID, videoID),
 		formatInteractionCacheValue(active, version),
@@ -328,10 +329,11 @@ func setInteractionStateCache(kind interactionKind, userID, videoID uint, active
 }
 
 func getInteractionStateFromCache(kind interactionKind, userID, videoID uint) (bool, int64, bool) {
-	if config.RDB == nil || userID == 0 || videoID == 0 {
+	client := config.GetRedisClient()
+	if client == nil || userID == 0 || videoID == 0 {
 		return false, 0, false
 	}
-	raw, err := config.RDB.Get(config.Ctx, interactionCacheKey(kind, userID, videoID)).Result()
+	raw, err := client.Get(config.Ctx, interactionCacheKey(kind, userID, videoID)).Result()
 	if err != nil || raw == "" {
 		return false, 0, false
 	}
@@ -339,10 +341,11 @@ func getInteractionStateFromCache(kind interactionKind, userID, videoID uint) (b
 }
 
 func isInteractionCommandStale(cmd interactionCommand) (bool, error) {
-	if config.RDB == nil {
+	client := config.GetRedisClient()
+	if client == nil {
 		return false, nil
 	}
-	raw, err := config.RDB.Get(config.Ctx, interactionCacheKey(cmd.Kind, cmd.UserID, cmd.VideoID)).Result()
+	raw, err := client.Get(config.Ctx, interactionCacheKey(cmd.Kind, cmd.UserID, cmd.VideoID)).Result()
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
 			return false, nil
@@ -402,7 +405,8 @@ func getInteractionStatesBatch(kind interactionKind, userID uint, videoIDs []uin
 	}
 
 	missIDs := make([]uint, 0, len(videoIDs))
-	if config.RDB != nil {
+	client := config.GetRedisClient()
+	if client != nil {
 		keys := make([]string, 0, len(videoIDs))
 		keyToVideoID := make(map[string]uint, len(videoIDs))
 		for _, videoID := range videoIDs {
@@ -414,7 +418,7 @@ func getInteractionStatesBatch(kind interactionKind, userID uint, videoIDs []uin
 			keyToVideoID[key] = videoID
 		}
 
-		values, err := config.RDB.MGet(config.Ctx, keys...).Result()
+		values, err := client.MGet(config.Ctx, keys...).Result()
 		if err == nil && len(values) == len(keys) {
 			for i, value := range values {
 				videoID := keyToVideoID[keys[i]]

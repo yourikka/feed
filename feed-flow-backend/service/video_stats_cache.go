@@ -119,12 +119,13 @@ func parseInt64FromCacheValue(v any) (int64, bool) {
 }
 
 func getVideoStatsFromCache(videoID uint) (videoStats, bool) {
-	if config.RDB == nil || videoID == 0 {
+	client := config.GetRedisClient()
+	if client == nil || videoID == 0 {
 		return videoStats{}, false
 	}
 
 	key := videoStatsCacheKey(videoID)
-	values, err := config.RDB.HMGet(config.Ctx, key, videoStatsLikeField, videoStatsCommentField, videoStatsFavoriteField).Result()
+	values, err := client.HMGet(config.Ctx, key, videoStatsLikeField, videoStatsCommentField, videoStatsFavoriteField).Result()
 	if err != nil || len(values) != 3 {
 		return videoStats{}, false
 	}
@@ -144,7 +145,8 @@ func getVideoStatsFromCache(videoID uint) (videoStats, bool) {
 }
 
 func setVideoStatsCache(videoID uint, stats videoStats) {
-	if config.RDB == nil || videoID == 0 {
+	client := config.GetRedisClient()
+	if client == nil || videoID == 0 {
 		return
 	}
 
@@ -159,35 +161,37 @@ func setVideoStatsCache(videoID uint, stats videoStats) {
 	}
 
 	key := videoStatsCacheKey(videoID)
-	_ = config.RDB.HSet(config.Ctx, key, map[string]any{
+	_ = client.HSet(config.Ctx, key, map[string]any{
 		videoStatsLikeField:     stats.LikeCount,
 		videoStatsCommentField:  stats.CommentCount,
 		videoStatsFavoriteField: stats.FavoriteCount,
 	}).Err()
-	_ = config.RDB.Expire(config.Ctx, key, getVideoStatsCacheTTL()).Err()
+	_ = client.Expire(config.Ctx, key, getVideoStatsCacheTTL()).Err()
 }
 
 func adjustVideoStatsCache(videoID uint, field string, delta int64) {
-	if config.RDB == nil || videoID == 0 || delta == 0 {
+	client := config.GetRedisClient()
+	if client == nil || videoID == 0 || delta == 0 {
 		return
 	}
 
 	key := videoStatsCacheKey(videoID)
-	newVal, err := config.RDB.HIncrBy(config.Ctx, key, field, delta).Result()
+	newVal, err := client.HIncrBy(config.Ctx, key, field, delta).Result()
 	if err != nil {
 		return
 	}
 	if newVal < 0 {
-		_ = config.RDB.HSet(config.Ctx, key, field, 0).Err()
+		_ = client.HSet(config.Ctx, key, field, 0).Err()
 	}
-	_ = config.RDB.Expire(config.Ctx, key, getVideoStatsCacheTTL()).Err()
+	_ = client.Expire(config.Ctx, key, getVideoStatsCacheTTL()).Err()
 }
 
 func invalidateVideoStatsCache(videoID uint) {
-	if config.RDB == nil || videoID == 0 {
+	client := config.GetRedisClient()
+	if client == nil || videoID == 0 {
 		return
 	}
-	_ = config.RDB.Del(config.Ctx, videoStatsCacheKey(videoID)).Err()
+	_ = client.Del(config.Ctx, videoStatsCacheKey(videoID)).Err()
 }
 
 func queryVideoStats(videoIDs []uint) (map[uint]videoStats, error) {
@@ -299,7 +303,7 @@ func getVideoStatsBatch(videoIDs []uint) (map[uint]videoStats, error) {
 
 	idsToQuery := missIDs
 	var acquiredLockKeys []string
-	if config.RDB != nil {
+	if config.GetRedisClient() != nil {
 		ownerIDs := make([]uint, 0, len(missIDs))
 		waitIDs := make([]uint, 0, len(missIDs))
 		acquiredLockKeys = make([]string, 0, len(missIDs))
@@ -339,11 +343,12 @@ func getVideoStatsBatch(videoIDs []uint) (map[uint]videoStats, error) {
 }
 
 func tryAcquireVideoStatsLock(videoID uint) (string, bool) {
-	if config.RDB == nil || videoID == 0 {
+	client := config.GetRedisClient()
+	if client == nil || videoID == 0 {
 		return "", false
 	}
 	lockKey := fmt.Sprintf("%s%d", videoStatsLockKeyPrefix, videoID)
-	locked, err := config.RDB.SetNX(config.Ctx, lockKey, "1", videoStatsLockTTL).Result()
+	locked, err := client.SetNX(config.Ctx, lockKey, "1", videoStatsLockTTL).Result()
 	if err != nil || !locked {
 		return "", false
 	}
@@ -351,11 +356,12 @@ func tryAcquireVideoStatsLock(videoID uint) (string, bool) {
 }
 
 func releaseVideoStatsLocks(lockKeys []string) {
-	if config.RDB == nil || len(lockKeys) == 0 {
+	client := config.GetRedisClient()
+	if client == nil || len(lockKeys) == 0 {
 		return
 	}
 	for _, lockKey := range lockKeys {
-		_ = config.RDB.Del(config.Ctx, lockKey).Err()
+		_ = client.Del(config.Ctx, lockKey).Err()
 	}
 }
 

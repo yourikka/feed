@@ -205,10 +205,11 @@ func isSupportedVideoEvent(eventType string) bool {
 }
 
 func reserveBehaviorRequest(requestID string) (bool, error) {
-	if config.RDB == nil || requestID == "" {
+	client := config.GetRedisClient()
+	if client == nil || requestID == "" {
 		return false, nil
 	}
-	ok, err := config.RDB.SetNX(config.Ctx, behaviorRequestKeyPrefix+requestID, "1", behaviorRequestKeyTTL).Result()
+	ok, err := client.SetNX(config.Ctx, behaviorRequestKeyPrefix+requestID, "1", behaviorRequestKeyTTL).Result()
 	if err != nil {
 		return false, err
 	}
@@ -216,12 +217,13 @@ func reserveBehaviorRequest(requestID string) (bool, error) {
 }
 
 func reserveUniqueExposure(viewerKey string, videoID uint, now time.Time) (bool, error) {
-	if config.RDB == nil {
+	client := config.GetRedisClient()
+	if client == nil {
 		return true, nil
 	}
 	bucket := now.UTC().Format("2006010215")
 	key := fmt.Sprintf("%s%s:%d:%s", exposureDedupeKeyPrefix, viewerKey, videoID, bucket)
-	ok, err := config.RDB.SetNX(config.Ctx, key, "1", exposureDedupeBucketTTL).Result()
+	ok, err := client.SetNX(config.Ctx, key, "1", exposureDedupeBucketTTL).Result()
 	if err != nil {
 		return false, err
 	}
@@ -229,13 +231,14 @@ func reserveUniqueExposure(viewerKey string, videoID uint, now time.Time) (bool,
 }
 
 func recordRecentExposure(viewerKey string, videoID uint, now time.Time) {
-	if config.RDB == nil || viewerKey == "" || videoID == 0 {
+	client := config.GetRedisClient()
+	if client == nil || viewerKey == "" || videoID == 0 {
 		return
 	}
 	key := recentExposureKeyPrefix + viewerKey
 	member := strconv.FormatUint(uint64(videoID), 10)
 	score := float64(now.Unix())
-	pipe := config.RDB.Pipeline()
+	pipe := client.Pipeline()
 	pipe.ZAdd(config.Ctx, key, &redis.Z{Score: score, Member: member})
 	pipe.ZRemRangeByScore(config.Ctx, key, "-inf", strconv.FormatInt(now.Add(-recentExposureLookback).Unix(), 10))
 	pipe.Expire(config.Ctx, key, recentExposureSetTTL)
@@ -243,7 +246,8 @@ func recordRecentExposure(viewerKey string, videoID uint, now time.Time) {
 }
 
 func getRecentExposureSet(viewerKey string, limit int) (map[uint]struct{}, error) {
-	if config.RDB == nil || viewerKey == "" {
+	client := config.GetRedisClient()
+	if client == nil || viewerKey == "" {
 		return map[uint]struct{}{}, nil
 	}
 	if limit <= 0 {
@@ -251,7 +255,7 @@ func getRecentExposureSet(viewerKey string, limit int) (map[uint]struct{}, error
 	}
 	key := recentExposureKeyPrefix + viewerKey
 	minScore := strconv.FormatInt(time.Now().Add(-recentExposureLookback).Unix(), 10)
-	rows, err := config.RDB.ZRevRangeByScore(config.Ctx, key, &redis.ZRangeBy{
+	rows, err := client.ZRevRangeByScore(config.Ctx, key, &redis.ZRangeBy{
 		Max:   "+inf",
 		Min:   minScore,
 		Count: int64(limit),

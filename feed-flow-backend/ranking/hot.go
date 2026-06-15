@@ -22,14 +22,15 @@ const (
 )
 
 func RecordHotEvent(videoID uint, delta float64) {
-	if videoID == 0 || delta == 0 || config.RDB == nil {
+	client := config.GetRedisClient()
+	if videoID == 0 || delta == 0 || client == nil {
 		return
 	}
 
 	member := strconv.FormatUint(uint64(videoID), 10)
 	bucketKey := currentBucketKey()
 
-	pipe := config.RDB.Pipeline()
+	pipe := client.Pipeline()
 	pipe.ZIncrBy(config.Ctx, bucketKey, delta, member)
 	pipe.Expire(config.Ctx, bucketKey, getBucketTTL())
 	if _, err := pipe.Exec(config.Ctx); err != nil {
@@ -45,7 +46,8 @@ func GetHotVideoIDsByAggKey(aggKey string, offset, limit int) ([]uint, int64, er
 	if limit <= 0 {
 		return []uint{}, 0, nil
 	}
-	if config.RDB == nil {
+	client := config.GetRedisClient()
+	if client == nil {
 		return nil, 0, fmt.Errorf("redis unavailable")
 	}
 
@@ -61,7 +63,7 @@ func GetHotVideoIDsByAggKey(aggKey string, offset, limit int) ([]uint, int64, er
 		return nil, 0, err
 	}
 
-	total, err := config.RDB.ZCard(config.Ctx, aggKey).Result()
+	total, err := client.ZCard(config.Ctx, aggKey).Result()
 	if err != nil {
 		return nil, 0, err
 	}
@@ -71,7 +73,7 @@ func GetHotVideoIDsByAggKey(aggKey string, offset, limit int) ([]uint, int64, er
 
 	start := int64(offset)
 	end := int64(offset + limit - 1)
-	rows, err := config.RDB.ZRevRange(config.Ctx, aggKey, start, end).Result()
+	rows, err := client.ZRevRange(config.Ctx, aggKey, start, end).Result()
 	if err != nil {
 		return nil, 0, err
 	}

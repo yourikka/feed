@@ -34,10 +34,11 @@ func getFeedVideoCacheTTL() time.Duration {
 }
 
 func getFeedVideoFromCache(viewerKey string, videoID uint) (FeedVideo, bool) {
-	if config.RDB == nil || viewerKey == "" || videoID == 0 {
+	client := config.GetRedisClient()
+	if client == nil || viewerKey == "" || videoID == 0 {
 		return FeedVideo{}, false
 	}
-	raw, err := config.RDB.Get(config.Ctx, getFeedVideoCacheKey(viewerKey, videoID)).Result()
+	raw, err := client.Get(config.Ctx, getFeedVideoCacheKey(viewerKey, videoID)).Result()
 	if err != nil || raw == "" {
 		return FeedVideo{}, false
 	}
@@ -49,7 +50,8 @@ func getFeedVideoFromCache(viewerKey string, videoID uint) (FeedVideo, bool) {
 }
 
 func setFeedVideoCache(viewerKey string, item FeedVideo) {
-	if config.RDB == nil || viewerKey == "" || item.ID == 0 {
+	client := config.GetRedisClient()
+	if client == nil || viewerKey == "" || item.ID == 0 {
 		return
 	}
 	payload, err := json.Marshal(item)
@@ -58,7 +60,7 @@ func setFeedVideoCache(viewerKey string, item FeedVideo) {
 	}
 	cacheKey := getFeedVideoCacheKey(viewerKey, item.ID)
 	indexKey := getFeedVideoIndexKey(item.ID)
-	pipe := config.RDB.Pipeline()
+	pipe := client.Pipeline()
 	pipe.Set(config.Ctx, cacheKey, payload, getFeedVideoCacheTTL())
 	pipe.SAdd(config.Ctx, indexKey, cacheKey)
 	pipe.Expire(config.Ctx, indexKey, feedVideoIndexTTL)
@@ -67,7 +69,8 @@ func setFeedVideoCache(viewerKey string, item FeedVideo) {
 
 func getFeedVideosFromCache(viewerKey string, videoIDs []uint) (map[uint]FeedVideo, []uint) {
 	cached := make(map[uint]FeedVideo, len(videoIDs))
-	if config.RDB == nil || viewerKey == "" || len(videoIDs) == 0 {
+	client := config.GetRedisClient()
+	if client == nil || viewerKey == "" || len(videoIDs) == 0 {
 		return cached, videoIDs
 	}
 
@@ -85,7 +88,7 @@ func getFeedVideosFromCache(viewerKey string, videoIDs []uint) (map[uint]FeedVid
 		return cached, videoIDs
 	}
 
-	values, err := config.RDB.MGet(config.Ctx, keys...).Result()
+	values, err := client.MGet(config.Ctx, keys...).Result()
 	if err != nil || len(values) != len(keys) {
 		return cached, videoIDs
 	}
@@ -123,29 +126,31 @@ func getFeedVideosFromCache(viewerKey string, videoIDs []uint) (map[uint]FeedVid
 }
 
 func invalidateFeedVideoCache(viewerKey string, videoID uint) {
-	if config.RDB == nil || viewerKey == "" || videoID == 0 {
+	client := config.GetRedisClient()
+	if client == nil || viewerKey == "" || videoID == 0 {
 		return
 	}
-	_ = config.RDB.Del(config.Ctx, getFeedVideoCacheKey(viewerKey, videoID)).Err()
+	_ = client.Del(config.Ctx, getFeedVideoCacheKey(viewerKey, videoID)).Err()
 }
 
 func invalidateFeedVideoCacheForVideo(videoID uint) {
-	if config.RDB == nil || videoID == 0 {
+	client := config.GetRedisClient()
+	if client == nil || videoID == 0 {
 		return
 	}
 	indexKey := getFeedVideoIndexKey(videoID)
-	keys, err := config.RDB.SMembers(config.Ctx, indexKey).Result()
+	keys, err := client.SMembers(config.Ctx, indexKey).Result()
 	if err != nil || len(keys) == 0 {
 		return
 	}
-	pipe := config.RDB.Pipeline()
+	pipe := client.Pipeline()
 	pipe.Unlink(config.Ctx, keys...)
 	pipe.Del(config.Ctx, indexKey)
 	_, _ = pipe.Exec(config.Ctx)
 }
 
 func invalidateFeedVideoCacheByAuthor(authorID uint) {
-	if config.RDB == nil || authorID == 0 {
+	if config.GetRedisClient() == nil || authorID == 0 {
 		return
 	}
 	var videoIDs []uint

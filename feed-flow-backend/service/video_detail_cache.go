@@ -68,10 +68,11 @@ func toModelVideo(detail cachedVideoDetail) model.Video {
 }
 
 func getVideoDetailFromCache(videoID uint) (model.Video, bool) {
-	if config.RDB == nil || videoID == 0 {
+	client := config.GetRedisClient()
+	if client == nil || videoID == 0 {
 		return model.Video{}, false
 	}
-	raw, err := config.RDB.Get(config.Ctx, getVideoDetailCacheKey(videoID)).Result()
+	raw, err := client.Get(config.Ctx, getVideoDetailCacheKey(videoID)).Result()
 	if err != nil || raw == "" {
 		return model.Video{}, false
 	}
@@ -86,21 +87,23 @@ func getVideoDetailFromCache(videoID uint) (model.Video, bool) {
 }
 
 func setVideoDetailCache(video model.Video) {
-	if config.RDB == nil || video.ID == 0 {
+	client := config.GetRedisClient()
+	if client == nil || video.ID == 0 {
 		return
 	}
 	payload, err := json.Marshal(toCachedVideoDetail(video))
 	if err != nil {
 		return
 	}
-	_ = config.RDB.Set(config.Ctx, getVideoDetailCacheKey(video.ID), payload, getVideoDetailCacheTTL()).Err()
+	_ = client.Set(config.Ctx, getVideoDetailCacheKey(video.ID), payload, getVideoDetailCacheTTL()).Err()
 }
 
 func invalidateVideoDetailCache(videoID uint) {
-	if config.RDB == nil || videoID == 0 {
+	client := config.GetRedisClient()
+	if client == nil || videoID == 0 {
 		return
 	}
-	_ = config.RDB.Del(config.Ctx, getVideoDetailCacheKey(videoID)).Err()
+	_ = client.Del(config.Ctx, getVideoDetailCacheKey(videoID)).Err()
 }
 
 func getVideosByIDsOrderedWithCache(videoIDs []uint) ([]model.Video, error) {
@@ -110,7 +113,8 @@ func getVideosByIDsOrderedWithCache(videoIDs []uint) ([]model.Video, error) {
 
 	videoMap := make(map[uint]model.Video, len(videoIDs))
 	missIDs := make([]uint, 0, len(videoIDs))
-	if config.RDB != nil {
+	client := config.GetRedisClient()
+	if client != nil {
 		keys := make([]string, 0, len(videoIDs))
 		keyToID := make(map[string]uint, len(videoIDs))
 		for _, videoID := range videoIDs {
@@ -121,7 +125,7 @@ func getVideosByIDsOrderedWithCache(videoIDs []uint) ([]model.Video, error) {
 			keys = append(keys, key)
 			keyToID[key] = videoID
 		}
-		values, err := config.RDB.MGet(config.Ctx, keys...).Result()
+		values, err := client.MGet(config.Ctx, keys...).Result()
 		if err == nil && len(values) == len(keys) {
 			for i, value := range values {
 				videoID := keyToID[keys[i]]
